@@ -23,6 +23,9 @@ type Result struct {
 	Enrich    *Enrichment  `json:"enrichment,omitempty"`
 	Findings  []Finding    `json:"findings,omitempty"`
 	Mitre     []MitreHit   `json:"mitre,omitempty"`
+	Verdict   *Verdict     `json:"verdict,omitempty"`
+	IOCs      *IOCSet      `json:"iocs,omitempty"`
+	Evidence  []Evidence   `json:"evidence,omitempty"`
 	Errors    []string     `json:"errors,omitempty"`
 	Duration  string       `json:"duration"`
 }
@@ -98,6 +101,7 @@ type HTTPResult struct {
 	RedirectCount int               `json:"redirect_count"`
 	Error         string            `json:"error,omitempty"`
 	Page          *PageAnalysis     `json:"page,omitempty"`
+	Body          []byte            `json:"-"` // retained for optional evidence snapshots
 }
 
 // ASNInfo is an IP→ASN mapping (via Team Cymru DNS).

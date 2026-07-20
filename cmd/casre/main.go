@@ -26,17 +26,21 @@ func main() {
 		portsFlag   string
 		modulesFlag string
 		timeoutSec  float64
+		budgetSec   float64
 		noColor     bool
 		forceColor  bool
 		outFile     string
 		diffFile    string
+		evidenceDir string
 		noFollow    bool
+		fullCrawl   bool
 	)
 
 	flag.StringVar(&targetsFile, "f", "", "file with targets (one host/domain per line); also accepts stdin")
 	flag.IntVar(&cfg.Concurrency, "c", cfg.Concurrency, "max concurrent targets")
 	flag.Float64Var(&cfg.RateLimit, "rate", cfg.RateLimit, "global rate limit (ops/sec, 0=unlimited)")
 	flag.Float64Var(&timeoutSec, "timeout", cfg.Timeout.Seconds(), "per-connection timeout in seconds")
+	flag.Float64Var(&budgetSec, "budget", 0, "wall-clock budget for URL hop crawl in seconds (0=auto)")
 	flag.StringVar(&portsFlag, "ports", joinPorts(cfg.Ports), "comma-separated TCP ports for banner grab")
 	flag.StringVar(&modulesFlag, "modules", "dns,tls,banner,http,enrich", "comma-separated modules to run")
 	flag.BoolVar(&cfg.OutputJSON, "json", false, "emit NDJSON to stdout")
@@ -44,17 +48,20 @@ func main() {
 	flag.BoolVar(&cfg.Verbose, "v", false, "verbose text output (full SANs, redirects, info findings)")
 	flag.BoolVar(&cfg.InsecureTLS, "insecure", false, "skip TLS certificate verification")
 	flag.BoolVar(&noFollow, "no-follow", false, "disable automatic phishing-graph crawling for URL inputs")
+	flag.BoolVar(&fullCrawl, "full-crawl", false, "disable campaign-mode stops (follow brand/CDN/social more aggressively)")
 	flag.IntVar(&cfg.Depth, "depth", cfg.Depth, "max hop depth when following URL graphs")
 	flag.IntVar(&cfg.MaxURLs, "max-urls", cfg.MaxURLs, "max URLs to probe while crawling a graph")
+	flag.IntVar(&cfg.HopWorkers, "hop-workers", cfg.HopWorkers, "parallel hop probes per URL target")
 	flag.BoolVar(&noColor, "no-color", false, "disable ANSI colors")
 	flag.BoolVar(&forceColor, "color", false, "force ANSI colors even when stdout is not a TTY")
 	flag.StringVar(&outFile, "o", "", "save full results to JSON report file")
 	flag.StringVar(&diffFile, "diff", "", "compare this scan against a previous -o report")
+	flag.StringVar(&evidenceDir, "evidence", "", "directory to save HTML snapshots of cloaker/lander pages")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `CASRE — Concurrent Attack Surface Recon Engine
 
 High-speed Go scanner for external infrastructure mapping and phishing URL chains:
-  DNS · TLS · banners · HTTP · CDN/ASN · page analysis · hop graph · MITRE ATT&CK tags
+  DNS · TLS · banners · HTTP · CDN/ASN · page analysis · campaign hop graph · MITRE · verdict · IOCs
 
 Usage:
   casre [flags] host1 [host2 ...]
@@ -71,8 +78,8 @@ Flags:
 Examples:
   casre example.com
   casre -v 'https://bit.ly/suspicious'
-  casre -depth 8 -max-urls 40 'https://lure.example/a'
-  casre -no-follow 'https://lure.example/a'
+  casre -evidence ./evidence 'https://lure.example/a'
+  casre -full-crawl -budget 60 'https://lure.example/a'
   casre -o baseline.json -f scope.txt
 
 Use only against systems you are authorized to test.
@@ -81,7 +88,12 @@ Use only against systems you are authorized to test.
 	flag.Parse()
 
 	cfg.Follow = !noFollow
+	cfg.Campaign = cfg.Follow && !fullCrawl
+	cfg.EvidenceDir = strings.TrimSpace(evidenceDir)
 	cfg.Timeout = time.Duration(timeoutSec * float64(time.Second))
+	if budgetSec > 0 {
+		cfg.CrawlBudget = time.Duration(budgetSec * float64(time.Second))
+	}
 	ports, err := parsePorts(portsFlag)
 	if err != nil {
 		fatal("ports: %v", err)
@@ -134,6 +146,10 @@ Use only against systems you are authorized to test.
 			Follow:      cfg.Follow,
 			Depth:       cfg.Depth,
 			MaxURLs:     cfg.MaxURLs,
+			Campaign:    cfg.Campaign,
+			HopWorkers:  cfg.HopWorkers,
+			Budget:      scanner.CrawlDeadline(cfg),
+			EvidenceDir: cfg.EvidenceDir,
 		}
 		output.PrintHeader(os.Stderr, meta, useColor)
 	}

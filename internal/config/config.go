@@ -20,6 +20,19 @@ type Config struct {
 	Follow  bool
 	Depth   int // max hop depth from the seed URL
 	MaxURLs int // max URLs to probe while crawling
+
+	// Campaign restricts crawl to ESP → cloaker → lander style chains
+	// and stops expanding brand / CDN / social decoys. Default on with Follow.
+	Campaign bool
+
+	// CrawlBudget is the wall-clock limit for hop-graph mapping (0 = auto).
+	CrawlBudget time.Duration
+
+	// HopWorkers is parallelism for URL hop probes within one target.
+	HopWorkers int
+
+	// EvidenceDir when set saves HTML snapshots of cloaker/lander pages.
+	EvidenceDir string
 }
 
 // Modules toggles scanner capabilities.
@@ -45,8 +58,11 @@ func Default() Config {
 			HTTP:   true,
 			Enrich: true,
 		},
-		Follow:  true,
-		Depth:   5,
-		MaxURLs: 25,
+		Follow:      true,
+		Depth:       5,
+		MaxURLs:     25,
+		Campaign:    true,
+		CrawlBudget: 0, // auto from CrawlDeadline
+		HopWorkers:  8,
 	}
 }

@@ -18,6 +18,10 @@ type RunMeta struct {
 	Follow      bool
 	Depth       int
 	MaxURLs     int
+	Campaign    bool
+	HopWorkers  int
+	Budget      time.Duration
+	EvidenceDir string
 }
 
 // DoneMeta summarizes a finished run.
@@ -50,14 +54,22 @@ func PrintHeader(w io.Writer, meta RunMeta, color bool) {
 		{"modules", meta.Modules},
 	}
 	if meta.Follow {
+		mode := "campaign"
+		if !meta.Campaign {
+			mode = "full"
+		}
 		rows = append(rows, struct{ k, v string }{
-			"follow", fmt.Sprintf("on · depth=%d · max-urls=%d", meta.Depth, meta.MaxURLs),
+			"follow", fmt.Sprintf("on · %s · depth=%d · max-urls=%d · workers=%d · budget=%s",
+				mode, meta.Depth, meta.MaxURLs, meta.HopWorkers, meta.Budget.Round(time.Second)),
 		})
 	} else {
 		rows = append(rows, struct{ k, v string }{"follow", "off"})
 	}
 	if meta.OutFile != "" {
 		rows = append(rows, struct{ k, v string }{"save", meta.OutFile})
+	}
+	if meta.EvidenceDir != "" {
+		rows = append(rows, struct{ k, v string }{"evidence", meta.EvidenceDir})
 	}
 
 	for i, row := range rows {

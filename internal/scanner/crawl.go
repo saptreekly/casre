@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/saptreekly/casre/internal/config"
@@ -19,6 +20,7 @@ type GraphNode struct {
 	URL        string `json:"url"`
 	Host       string `json:"host"`
 	Depth      int    `json:"depth"`
+	Role       string `json:"role,omitempty"` // tracker, cloaker, deepview, lander, decoy
 	StatusCode int    `json:"status_code,omitempty"`
 	Title      string `json:"title,omitempty"`
 	Error      string `json:"error,omitempty"`
@@ -30,7 +32,7 @@ type GraphNode struct {
 type GraphEdge struct {
 	From string `json:"from"`
 	To   string `json:"to"`
-	Via  string `json:"via"` // http, js, meta, form
+	Via  string `json:"via"` // http, js, meta, form, link
 }
 
 // AttackGraph is the mapped redirect/JS hop network for one investigation.
@@ -44,29 +46,50 @@ type HopDetail struct {
 	URL      string        `json:"url"`
 	Host     string        `json:"host"`
 	Depth    int           `json:"depth"`
+	Role     string        `json:"role,omitempty"`
 	Probe    *HTTPResult   `json:"probe,omitempty"`
 	Page     *PageAnalysis `json:"page,omitempty"`
 	Findings []Finding     `json:"findings,omitempty"`
 }
 
 type crawlItem struct {
-	raw   string // may include fragment for analysis
-	wire  string // URL fetched on the wire
-	depth int
-	via   string
-	from  string // parent wire/id
+	raw        string
+	wire       string
+	depth      int
+	via        string
+	from       string
+	parentRole string
+	expand     bool // if false, visit but do not enqueue children (decoy terminal)
+}
+
+type hopOutcome struct {
+	item        crawlItem
+	probe       HTTPResult
+	page        *PageAnalysis
+	host        string
+	role        string
+	hopFindings []Finding
+	next        []queuedHop
+	evidence    *Evidence
+}
+
+type queuedHop struct {
+	url    string
+	via    string
+	expand bool
 }
 
 // CrawlFollow maps HTTP/JS/meta/form hops starting from a seed URL target.
+// Probes run in parallel waves under cfg.HopWorkers, bounded by max URLs and ctx deadline.
 func CrawlFollow(
 	ctx context.Context,
 	seed Target,
 	cfg config.Config,
 	limiter *ratelimit.Limiter,
 	resolver *net.Resolver,
-) (*AttackGraph, []HopDetail, []Finding) {
+) (*AttackGraph, []HopDetail, []Finding, []Evidence) {
 	if seed.URL == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	depthLimit := cfg.Depth
 	if depthLimit < 1 {
@@ -76,6 +99,15 @@ func CrawlFollow(
 	if maxURLs < 1 {
 		maxURLs = 10
 	}
+	workers := cfg.HopWorkers
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > 32 {
+		workers = 32
+	}
+	campaign := cfg.Campaign
+	fullCrawl := !campaign
 
 	visited := map[string]struct{}{}
 	hostSeen := map[string]struct{}{}
@@ -83,13 +115,15 @@ func CrawlFollow(
 	var edges []GraphEdge
 	var hops []HopDetail
 	var findings []Finding
+	var evidence []Evidence
 	edgeSet := map[string]struct{}{}
 
 	queue := []crawlItem{{
-		raw:   firstNonEmpty(seed.RawInput, seed.URL),
-		wire:  seed.URL,
-		depth: 0,
-		via:   "seed",
+		raw:    firstNonEmpty(seed.RawInput, seed.URL),
+		wire:   seed.URL,
+		depth:  0,
+		via:    "seed",
+		expand: true,
 	}}
 
 	wait := func() error {
@@ -103,209 +137,266 @@ func CrawlFollow(
 		if err := ctx.Err(); err != nil {
 			break
 		}
-		item := queue[0]
-		queue = queue[1:]
 
-		key := normalizeVisitKey(item.wire)
-		if _, ok := visited[key]; ok {
+		// Take a parallel batch; mark visited up front to avoid duplicate probes.
+		batchSize := workers
+		if batchSize > len(queue) {
+			batchSize = len(queue)
+		}
+		if batchSize > maxURLs-len(hops) {
+			batchSize = maxURLs - len(hops)
+		}
+		var batch []crawlItem
+		for len(queue) > 0 && len(batch) < batchSize {
+			item := queue[0]
+			queue = queue[1:]
+			key := normalizeVisitKey(item.wire)
+			if _, ok := visited[key]; ok {
+				continue
+			}
+			visited[key] = struct{}{}
+			batch = append(batch, item)
+		}
+		if len(batch) == 0 {
 			continue
 		}
-		visited[key] = struct{}{}
 
-		if err := wait(); err != nil {
-			break
-		}
+		outcomes := make([]hopOutcome, len(batch))
+		var wg sync.WaitGroup
+		for i, item := range batch {
+			wg.Add(1)
+			go func(i int, item crawlItem) {
+				defer wg.Done()
+				if err := ctx.Err(); err != nil {
+					outcomes[i] = hopOutcome{item: item, probe: HTTPResult{URL: item.wire, Error: err.Error()}}
+					return
+				}
+				if err := wait(); err != nil {
+					outcomes[i] = hopOutcome{item: item, probe: HTTPResult{URL: item.wire, Error: err.Error()}}
+					return
+				}
 
-		// One hop at a time so intermediaries (ESP click trackers, etc.) become graph nodes.
-		probe := ProbeURLHop(ctx, item.wire, cfg.Timeout, cfg.InsecureTLS)
-		host := HostFromURL(item.wire)
+				probe := ProbeURLHop(ctx, item.wire, cfg.Timeout, cfg.InsecureTLS)
+				host := HostFromURL(item.wire)
+				frag := fragmentOf(item.raw)
+				if frag == "" {
+					frag = seed.Fragment
+				}
+				page := probe.Page
 
-		// Stitch seed fragment onto destinations when JS uses location.hash.
-		frag := fragmentOf(item.raw)
-		if frag == "" {
-			frag = seed.Fragment
-		}
+				var hopFindings []Finding
+				if item.depth == 0 {
+					hopFindings = append(hopFindings, URLFindings(seed, &probe)...)
+				} else {
+					t := Target{Host: host, URL: item.wire, RawInput: item.raw, Fragment: frag}
+					hopFindings = append(hopFindings, URLFindings(t, &probe)...)
+				}
+				if page != nil {
+					hopFindings = append(hopFindings, PageFindings(item.wire, page)...)
+				}
 
-		page := probe.Page
-		var hopFindings []Finding
-		if item.depth == 0 {
-			hopFindings = append(hopFindings, URLFindings(seed, &probe)...)
-		} else {
-			t := Target{Host: host, URL: item.wire, RawInput: item.raw, Fragment: frag}
-			hopFindings = append(hopFindings, URLFindings(t, &probe)...)
-		}
-		pageURL := item.wire
-		if page != nil {
-			hopFindings = append(hopFindings, PageFindings(pageURL, page)...)
-		}
+				role := ClassifyNodeRoleCtx(host, item.wire, page, &probe, RoleContext{
+					ParentRole: item.parentRole,
+					Via:        item.via,
+				})
+				if isDecoyHost(host) {
+					role = RoleDecoy
+				} else if isLikelyBenignBrand(host) && role == RoleLander {
+					role = RoleUnknown
+				}
 
-		nodeID := item.wire
-		node := GraphNode{
-			ID:         nodeID,
-			URL:        firstNonEmpty(item.raw, item.wire),
-			Host:       host,
-			Depth:      item.depth,
-			StatusCode: probe.StatusCode,
-			Error:      probe.Error,
-			Seed:       item.depth == 0,
-		}
-		if page != nil {
-			node.Title = firstNonEmpty(page.Title, page.OGTitle)
-		}
+				out := hopOutcome{
+					item:        item,
+					probe:       probe,
+					page:        page,
+					host:        host,
+					role:        role,
+					hopFindings: hopFindings,
+				}
 
-		// Discover next hops.
-		type nextHop struct {
-			url string
-			via string
-		}
-		var next []nextHop
-
-		// HTTP Location from this response only (no auto-follow).
-		if probe.StatusCode >= 300 && probe.StatusCode < 400 &&
-			probe.FinalURL != "" && !sameWire(probe.FinalURL, item.wire) {
-			next = append(next, nextHop{url: probe.FinalURL, via: "http"})
-		}
-
-		if page != nil {
-			viaOf := func(u string) string {
-				for _, m := range page.MetaRefresh {
-					if sameWire(m, u) {
-						return "meta"
+				if cfg.EvidenceDir != "" && ShouldSnapshot(role) && len(probe.Body) > 0 {
+					title := ""
+					ct := ""
+					if page != nil {
+						title = page.Title
+						ct = page.ContentType
+					}
+					if ev, err := SaveEvidenceHTML(cfg.EvidenceDir, role, firstNonEmpty(item.raw, item.wire), host, title, ct, probe.Body); err == nil && ev != nil {
+						out.evidence = ev
 					}
 				}
-				for _, j := range page.JSRedirects {
-					if sameWire(j, u) {
-						return "js"
+
+				// Discover next hops.
+				type nextHop struct {
+					url string
+					via string
+				}
+				var next []nextHop
+
+				// Always advance HTTP redirects unless this node is a terminal decoy.
+				if role != RoleDecoy && item.expand &&
+					probe.StatusCode >= 300 && probe.StatusCode < 400 &&
+					probe.FinalURL != "" && !sameWire(probe.FinalURL, item.wire) {
+					next = append(next, nextHop{url: probe.FinalURL, via: "http"})
+				}
+
+				// Page/JS follows only for delivery roles (or full crawl).
+				if page != nil && item.expand && (fullCrawl || CampaignShouldExpand(role)) {
+					viaOf := func(u string) string {
+						for _, m := range page.MetaRefresh {
+							if sameWire(m, u) {
+								return "meta"
+							}
+						}
+						for _, j := range page.JSRedirects {
+							if sameWire(j, u) {
+								return "js"
+							}
+						}
+						return "link"
+					}
+					follow := append([]string{}, page.MetaRefresh...)
+					follow = append(follow, page.JSRedirects...)
+					if page.Deepview != "" || role == RoleDeepview || role == RoleCloaker {
+						follow = append(follow, page.Destinations...)
+					}
+					if campaign && role == RoleLander {
+						follow = append([]string{}, page.MetaRefresh...)
+						follow = append(follow, page.JSRedirects...)
+					}
+					seenF := map[string]struct{}{}
+					for _, u := range follow {
+						vk := normalizeVisitKey(u)
+						if _, ok := seenF[vk]; ok {
+							continue
+						}
+						seenF[vk] = struct{}{}
+						next = append(next, nextHop{url: stitchFragment(u, frag), via: viaOf(u)})
+					}
+					for _, f := range page.Forms {
+						if f.Action != "" {
+							ah := HostFromURL(f.Action)
+							if ah != "" && !HostEqual(ah, host) {
+								next = append(next, nextHop{url: f.Action, via: "form"})
+							}
+						}
 					}
 				}
-				return "link"
+
+				for _, n := range next {
+					n.url = strings.TrimSpace(n.url)
+					if n.url == "" || !crawlableURL(n.url) {
+						continue
+					}
+					childHost := HostFromURL(n.url)
+					visit, expandLater := CampaignShouldEnqueueChild(role, childHost, fullCrawl)
+					if !visit {
+						continue
+					}
+					if isNoiseDestination(n.url) {
+						continue
+					}
+					out.next = append(out.next, queuedHop{url: n.url, via: n.via, expand: expandLater || fullCrawl})
+				}
+
+				// Enrichment is applied serially after the batch to dedupe hosts.
+				outcomes[i] = out
+			}(i, item)
+		}
+		wg.Wait()
+
+		// Merge outcomes in batch order for stable graphs.
+		for _, out := range outcomes {
+			if out.item.wire == "" && out.probe.URL == "" {
+				continue
 			}
-			// Follow explicit redirects always; follow deepview embeds only on linker hosts.
-			follow := append([]string{}, page.MetaRefresh...)
-			follow = append(follow, page.JSRedirects...)
-			if page.Deepview != "" {
-				follow = append(follow, page.Destinations...)
+			nodeID := out.item.wire
+			node := GraphNode{
+				ID:         nodeID,
+				URL:        firstNonEmpty(out.item.raw, out.item.wire),
+				Host:       out.host,
+				Depth:      out.item.depth,
+				Role:       out.role,
+				StatusCode: out.probe.StatusCode,
+				Error:      out.probe.Error,
+				Seed:       out.item.depth == 0,
 			}
-			seenF := map[string]struct{}{}
-			for _, u := range follow {
-				vk := normalizeVisitKey(u)
-				if _, ok := seenF[vk]; ok {
+			if out.page != nil {
+				node.Title = firstNonEmpty(out.page.Title, out.page.OGTitle)
+			}
+
+			childCount := 0
+			for _, n := range out.next {
+				wire, rawKeep := splitWire(n.url)
+				vk := normalizeVisitKey(wire)
+				addEdge(&edges, edgeSet, nodeID, wire, n.via)
+				childCount++
+
+				if out.item.depth+1 > depthLimit {
 					continue
 				}
-				seenF[vk] = struct{}{}
-				next = append(next, nextHop{url: stitchFragment(u, frag), via: viaOf(u)})
-			}
-			for _, f := range page.Forms {
-				if f.Action != "" {
-					ah := HostFromURL(f.Action)
-					if ah != "" && !HostEqual(ah, host) {
-						next = append(next, nextHop{url: f.Action, via: "form"})
+				if _, ok := visited[vk]; ok {
+					continue
+				}
+				queued := false
+				for _, q := range queue {
+					if normalizeVisitKey(q.wire) == vk {
+						queued = true
+						break
 					}
 				}
-			}
-		}
-
-		// Dedup next and enqueue.
-		seenNext := map[string]struct{}{}
-		childCount := 0
-		for _, n := range next {
-			n.url = strings.TrimSpace(n.url)
-			if n.url == "" || !crawlableURL(n.url) {
-				continue
-			}
-			// Normalize wire URL (strip fragment for fetch key / fetch).
-			wire, rawKeep := splitWire(n.url)
-			vk := normalizeVisitKey(wire)
-			if _, ok := seenNext[vk]; ok {
-				continue
-			}
-			seenNext[vk] = struct{}{}
-
-			addEdge(&edges, edgeSet, nodeID, wire, n.via)
-			childCount++
-
-			if item.depth+1 > depthLimit {
-				continue
-			}
-			if _, ok := visited[vk]; ok {
-				continue
-			}
-			// Avoid already queued.
-			queued := false
-			for _, q := range queue {
-				if normalizeVisitKey(q.wire) == vk {
-					queued = true
-					break
+				if queued {
+					continue
 				}
+				if len(hops)+len(queue)+1 >= maxURLs {
+					continue
+				}
+				queue = append(queue, crawlItem{
+					raw:        rawKeep,
+					wire:       wire,
+					depth:      out.item.depth + 1,
+					via:        n.via,
+					from:       nodeID,
+					parentRole: out.role,
+					expand:     n.expand,
+				})
 			}
-			if queued {
-				continue
+
+			node.Terminal = childCount == 0 && out.probe.Error == ""
+			if out.role == RoleDecoy {
+				node.Terminal = true
 			}
-			if len(hops)+len(queue)+1 >= maxURLs {
-				continue
-			}
-			queue = append(queue, crawlItem{
-				raw:   rawKeep,
-				wire:  wire,
-				depth: item.depth + 1,
-				via:   n.via,
-				from:  nodeID,
+			nodes = append(nodes, node)
+			hops = append(hops, HopDetail{
+				URL:      node.URL,
+				Host:     out.host,
+				Depth:    out.item.depth,
+				Role:     out.role,
+				Probe:    &out.probe,
+				Page:     out.page,
+				Findings: out.hopFindings,
 			})
-		}
+			findings = append(findings, out.hopFindings...)
+			if out.evidence != nil {
+				evidence = append(evidence, *out.evidence)
+			}
 
-		node.Terminal = childCount == 0 && probe.Error == ""
-		nodes = append(nodes, node)
-		hops = append(hops, HopDetail{
-			URL:      node.URL,
-			Host:     host,
-			Depth:    item.depth,
-			Probe:    &probe,
-			Page:     page,
-			Findings: hopFindings,
-		})
-		findings = append(findings, hopFindings...)
-
-		// Light host enrichment once per host.
-		if cfg.Modules.Enrich && host != "" {
-			hk := strings.ToLower(host)
-			if _, ok := hostSeen[hk]; !ok {
-				hostSeen[hk] = struct{}{}
-				if err := wait(); err == nil {
-					dns := ResolveDNS(ctx, host, resolver)
-					en := Enrich(ctx, host, dns, nil, resolver)
-					findings = append(findings, EnrichFindings(en)...)
-					if en != nil {
-						for _, a := range en.ASN {
-							msg := fmt.Sprintf("hop %s ASN: AS%s", host, a.ASN)
-							if a.ASName != "" {
-								msg += " " + a.ASName
-							}
-							findings = append(findings, Finding{Severity: "info", Category: "graph", Message: msg})
-						}
-					}
-				}
-				if cfg.Modules.TLS {
-					if err := wait(); err == nil {
-						if tlsRes, err := ProbeTLS(ctx, host, cfg.Timeout, cfg.InsecureTLS); err == nil && len(tlsRes.Chain) > 0 {
-							findings = append(findings, Finding{
-								Severity: "info",
-								Category: "graph",
-								Message:  fmt.Sprintf("hop %s TLS: %s", host, shortSubject(tlsRes.Chain[0].Subject)),
-							})
-						}
-					}
+			if cfg.Modules.Enrich && out.host != "" && !(campaign && out.role == RoleDecoy) {
+				hk := strings.ToLower(out.host)
+				if _, ok := hostSeen[hk]; !ok {
+					hostSeen[hk] = struct{}{}
+					findings = append(findings, lightHopEnrich(ctx, out.host, cfg, wait, resolver)...)
 				}
 			}
 		}
 	}
 
-	// Mark terminals: nodes with no outgoing edges.
 	outCount := map[string]int{}
 	for _, e := range edges {
 		outCount[e.From]++
 	}
 	for i := range nodes {
-		if outCount[nodes[i].ID] == 0 {
+		if outCount[nodes[i].ID] == 0 || nodes[i].Role == RoleDecoy {
 			nodes[i].Terminal = true
 		}
 	}
@@ -317,13 +408,54 @@ func CrawlFollow(
 		return nodes[i].URL < nodes[j].URL
 	})
 
+	mode := "full"
+	if campaign {
+		mode = "campaign"
+	}
 	findings = append(findings, Finding{
 		Severity: "info",
 		Category: "graph",
-		Message:  fmt.Sprintf("mapped %d URL node(s), %d edge(s), depth≤%d", len(nodes), len(edges), depthLimit),
+		Message:  fmt.Sprintf("mapped %d URL node(s), %d edge(s), depth≤%d, mode=%s, hop-workers=%d", len(nodes), len(edges), depthLimit, mode, workers),
 	})
 
-	return &AttackGraph{Nodes: nodes, Edges: edges}, hops, dedupeFindings(findings)
+	return &AttackGraph{Nodes: nodes, Edges: edges}, hops, dedupeFindings(findings), evidence
+}
+
+func lightHopEnrich(
+	ctx context.Context,
+	host string,
+	cfg config.Config,
+	wait func() error,
+	resolver *net.Resolver,
+) []Finding {
+	var findings []Finding
+	if err := wait(); err != nil {
+		return nil
+	}
+	dns := ResolveDNS(ctx, host, resolver)
+	en := Enrich(ctx, host, dns, nil, resolver)
+	findings = append(findings, EnrichFindings(en)...)
+	if en != nil {
+		for _, a := range en.ASN {
+			msg := fmt.Sprintf("hop %s ASN: AS%s", host, a.ASN)
+			if a.ASName != "" {
+				msg += " " + a.ASName
+			}
+			findings = append(findings, Finding{Severity: "info", Category: "graph", Message: msg})
+		}
+	}
+	if cfg.Modules.TLS {
+		if err := wait(); err == nil {
+			if tlsRes, err := ProbeTLS(ctx, host, cfg.Timeout, cfg.InsecureTLS); err == nil && len(tlsRes.Chain) > 0 {
+				findings = append(findings, Finding{
+					Severity: "info",
+					Category: "graph",
+					Message:  fmt.Sprintf("hop %s TLS: %s", host, shortSubject(tlsRes.Chain[0].Subject)),
+				})
+			}
+		}
+	}
+	return findings
 }
 
 func dedupeFindings(in []Finding) []Finding {
@@ -371,7 +503,6 @@ func normalizeVisitKey(raw string) string {
 		return strings.ToLower(strings.TrimSpace(raw))
 	}
 	u.Fragment = ""
-	// Ignore default ports.
 	u.Host = strings.ToLower(u.Host)
 	u.Scheme = strings.ToLower(u.Scheme)
 	if u.Path == "" {
@@ -421,18 +552,22 @@ func firstNonEmpty(vals ...string) string {
 	return ""
 }
 
-// CrawlDeadline returns a generous timeout budget for graph crawling.
+// CrawlDeadline returns the wall-clock budget for graph crawling.
 func CrawlDeadline(cfg config.Config) time.Duration {
+	if cfg.CrawlBudget > 0 {
+		return cfg.CrawlBudget
+	}
 	n := cfg.MaxURLs
 	if n < 1 {
 		n = 10
 	}
-	d := cfg.Timeout * time.Duration(n+2)
-	if d < 30*time.Second {
-		d = 30 * time.Second
+	// Parallel hops finish faster — keep a sane floor/ceiling.
+	d := cfg.Timeout * time.Duration(n/2+3)
+	if d < 20*time.Second {
+		d = 20 * time.Second
 	}
-	if d > 3*time.Minute {
-		d = 3 * time.Minute
+	if d > 90*time.Second {
+		d = 90 * time.Second
 	}
 	return d
 }

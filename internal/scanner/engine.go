@@ -132,29 +132,16 @@ func (e *Engine) scanOne(ctx context.Context, t Target) Result {
 	// URL investigation: auto-crawl the phishing hop graph when Follow is on.
 	if t.URL != "" && e.cfg.Modules.HTTP {
 		if e.cfg.Follow {
-			graph, hops, graphFindings := CrawlFollow(scanCtx, t, e.cfg, e.limiter, e.resolver)
+			graph, hops, graphFindings, ev := CrawlFollow(scanCtx, t, e.cfg, e.limiter, e.resolver)
 			res.Graph = graph
 			res.Hops = hops
+			res.Evidence = ev
 			if len(hops) > 0 {
 				res.URLProbe = hops[0].Probe
 				res.Page = hops[0].Page
 			}
 			if graph != nil {
-				for _, n := range graph.Nodes {
-					if n.Terminal && n.Host != "" && !HostEqual(n.Host, t.Host) {
-						res.FinalHost = n.Host
-					}
-				}
-				// Prefer deepest non-seed host as final.
-				deepHost, deep := "", -1
-				for _, n := range graph.Nodes {
-					if n.Host != "" && !HostEqual(n.Host, t.Host) && n.Depth >= deep {
-						deep, deepHost = n.Depth, n.Host
-					}
-				}
-				if deepHost != "" {
-					res.FinalHost = deepHost
-				}
+				res.FinalHost = pickFinalHost(t.Host, graph.Nodes)
 			}
 			addFindings(graphFindings)
 		} else if err := waitRate(scanCtx); err != nil {
@@ -177,6 +164,13 @@ func (e *Engine) scanOne(ctx context.Context, t Target) Result {
 				res.FinalHost = probe.FinalHost
 			}
 			addFindings(URLFindings(t, &probe))
+			if e.cfg.EvidenceDir != "" && len(probe.Body) > 0 {
+				role := ClassifyNodeRoleCtx(t.Host, t.URL, probe.Page, &probe, RoleContext{Via: "seed"})
+				if ev, err := SaveEvidenceHTML(e.cfg.EvidenceDir, role, firstNonEmpty(t.RawInput, t.URL), t.Host,
+					pageTitle(probe.Page), pageCT(probe.Page), probe.Body); err == nil && ev != nil {
+					res.Evidence = append(res.Evidence, *ev)
+				}
+			}
 		}
 	} else if t.Fragment != "" {
 		addFindings(URLFindings(t, nil))
@@ -314,6 +308,8 @@ func (e *Engine) scanOne(ctx context.Context, t Target) Result {
 	res.Duration = time.Since(start).Round(time.Millisecond).String()
 	res.Findings = AnnotateMitre(res.Findings)
 	res.Mitre = MitreRollup(res.Findings)
+	res.Verdict = BuildVerdict(res)
+	res.IOCs = ExtractIOCs(res)
 	e.scanned.Add(1)
 	if len(res.Errors) > 0 && res.DNS == nil && res.TLS == nil && len(res.Banners) == 0 && res.URLProbe == nil {
 		e.failed.Add(1)
@@ -339,4 +335,59 @@ func expiryDays(days int) string {
 		return "EXPIRED"
 	}
 	return fmt.Sprintf("in %dd", days)
+}
+
+func pickFinalHost(seedHost string, nodes []GraphNode) string {
+	rank := func(role string) int {
+		switch role {
+		case RoleLander:
+			return 4
+		case RoleCloaker:
+			return 3
+		case RoleDeepview:
+			return 2
+		case RoleTracker:
+			return 1
+		default:
+			return 0
+		}
+	}
+	bestHost, bestRank, bestDepth := "", -1, -1
+	for _, n := range nodes {
+		if n.Host == "" || HostEqual(n.Host, seedHost) {
+			continue
+		}
+		if n.Role == RoleDecoy {
+			continue
+		}
+		r := rank(n.Role)
+		if r > bestRank || (r == bestRank && n.Depth >= bestDepth) {
+			bestRank, bestDepth, bestHost = r, n.Depth, n.Host
+		}
+	}
+	if bestHost != "" {
+		return bestHost
+	}
+	// Fallback: deepest non-seed.
+	deepHost, deep := "", -1
+	for _, n := range nodes {
+		if n.Host != "" && !HostEqual(n.Host, seedHost) && n.Depth >= deep {
+			deep, deepHost = n.Depth, n.Host
+		}
+	}
+	return deepHost
+}
+
+func pageTitle(p *PageAnalysis) string {
+	if p == nil {
+		return ""
+	}
+	return p.Title
+}
+
+func pageCT(p *PageAnalysis) string {
+	if p == nil {
+		return ""
+	}
+	return p.ContentType
 }

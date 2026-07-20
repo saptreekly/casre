@@ -68,6 +68,11 @@ func (t *TextWriter) Write(r scanner.Result) error {
 		fmt.Fprintf(&b, "%s%s%s\n", c.dim, truncateMiddle(r.InputURL, 88), c.reset)
 	}
 
+	if r.Verdict != nil {
+		writeVerdict(&b, c, r.Verdict)
+		b.WriteByte('\n')
+	}
+
 	sections := collectSections(r, t.opt.Verbose)
 	for si, sec := range sections {
 		lastSec := si == len(sections)-1
@@ -110,6 +115,37 @@ func (t *TextWriter) Write(r scanner.Result) error {
 
 	_, err := io.WriteString(t.w, b.String())
 	return err
+}
+
+func writeVerdict(b *strings.Builder, c palette, v *scanner.Verdict) {
+	sev := verdictSev(v.Label)
+	fmt.Fprintf(b, "%sVERDICT%s\n", c.section, c.reset)
+	rows := []treeLine{
+		{key: "score", value: fmt.Sprintf("%d/100 · %s", v.Score, v.Label), sev: sev},
+	}
+	if v.Narrative != "" {
+		rows = append(rows, treeLine{key: "story", value: v.Narrative, sev: sev})
+	}
+	if len(v.Signals) > 0 {
+		rows = append(rows, treeLine{key: "signals", value: strings.Join(v.Signals, " · "), sev: "info"})
+	}
+	for i, line := range rows {
+		prefix, _ := treePrefix(i == len(rows)-1)
+		renderTreeLine(b, c, prefix, "│  ", line)
+	}
+}
+
+func verdictSev(label string) string {
+	switch label {
+	case "malicious":
+		return "high"
+	case "suspicious":
+		return "medium"
+	case "noteworthy":
+		return "low"
+	default:
+		return "ok"
+	}
 }
 
 func (t *TextWriter) Flush() error { return nil }
@@ -318,6 +354,9 @@ func collectSections(r scanner.Result, verbose bool) []section {
 			var lines []treeLine
 			lines = append(lines, treeLine{key: "url", value: hop.URL, sev: "info"})
 			lines = append(lines, treeLine{key: "host", value: hop.Host})
+			if hop.Role != "" {
+				lines = append(lines, treeLine{key: "role", value: hop.Role, sev: roleSeverity(hop.Role)})
+			}
 			if hop.Probe != nil {
 				if hop.Probe.Error != "" {
 					lines = append(lines, treeLine{key: "error", value: hop.Probe.Error, sev: "high"})
@@ -527,6 +566,28 @@ func collectSections(r scanner.Result, verbose bool) []section {
 		}
 	}
 
+	if r.IOCs != nil {
+		if lines := iocSectionLines(r.IOCs, verbose); len(lines) > 0 {
+			out = append(out, section{title: "IOC", lines: lines})
+		}
+	}
+
+	if len(r.Evidence) > 0 {
+		var lines []treeLine
+		for _, ev := range r.Evidence {
+			val := fmt.Sprintf("%s · %d bytes", ev.Path, ev.Bytes)
+			if ev.Title != "" {
+				val = fmt.Sprintf("%q · %s", truncateMiddle(ev.Title, 40), val)
+			}
+			lines = append(lines, treeLine{
+				key:   ev.Role,
+				value: val,
+				sev:   roleSeverity(ev.Role),
+			})
+		}
+		out = append(out, section{title: "EVIDENCE", lines: lines})
+	}
+
 	if len(r.Findings) > 0 {
 		bySev := groupFindings(r.Findings)
 		var lines []treeLine
@@ -627,6 +688,58 @@ func countLowMitre(hits []scanner.MitreHit) int {
 		}
 	}
 	return n
+}
+
+func iocSectionLines(set *scanner.IOCSet, verbose bool) []treeLine {
+	if set == nil {
+		return nil
+	}
+	var lines []treeLine
+	addGroup := func(key string, items []scanner.IOC, limit int) {
+		if len(items) == 0 {
+			return
+		}
+		show := items
+		extra := 0
+		if !verbose && limit > 0 && len(show) > limit {
+			extra = len(show) - limit
+			show = show[:limit]
+		}
+		vals := make([]string, 0, len(show))
+		for _, i := range show {
+			v := i.Value
+			if i.Context != "" {
+				v += " · " + i.Context
+			}
+			vals = append(vals, v)
+		}
+		line := treeLine{
+			key:   key,
+			value: vals[0],
+			cont:  vals[1:],
+			sev:   iocGroupSev(items),
+		}
+		if extra > 0 {
+			line.cont = append(line.cont, fmt.Sprintf("+%d more (use -v)", extra))
+		}
+		lines = append(lines, line)
+	}
+	addGroup("domain", set.Domains, 12)
+	addGroup("ip", set.IPs, 8)
+	addGroup("url", set.URLs, 8)
+	addGroup("asn", set.ASNs, 6)
+	return lines
+}
+
+func iocGroupSev(items []scanner.IOC) string {
+	best := "info"
+	rank := map[string]int{"high": 3, "medium": 2, "low": 1, "info": 0}
+	for _, i := range items {
+		if rank[i.Severity] > rank[best] {
+			best = i.Severity
+		}
+	}
+	return best
 }
 
 func appendKV(lines []treeLine, key string, vals []string) []treeLine {
@@ -1022,6 +1135,13 @@ func graphSection(g *scanner.AttackGraph) section {
 		} else if n.Terminal {
 			tag = "terminal"
 		}
+		if n.Role != "" {
+			if tag != "" {
+				tag += "/" + n.Role
+			} else {
+				tag = n.Role
+			}
+		}
 		head := truncateMiddle(n.URL, 72)
 		if n.Title != "" {
 			head = fmt.Sprintf("%s · %q", head, truncateMiddle(n.Title, 32))
@@ -1032,8 +1152,8 @@ func graphSection(g *scanner.AttackGraph) section {
 		if tag != "" {
 			head = fmt.Sprintf("(%s) %s", tag, head)
 		}
-		sev := ""
-		if n.Terminal && !n.Seed {
+		sev := roleSeverity(n.Role)
+		if n.Terminal && !n.Seed && sev == "" {
 			sev = "high"
 		}
 		key := fmt.Sprintf("n%d", i+1)
@@ -1052,4 +1172,17 @@ func graphSection(g *scanner.AttackGraph) section {
 	}
 
 	return section{title: "GRAPH", lines: lines}
+}
+
+func roleSeverity(role string) string {
+	switch role {
+	case scanner.RoleCloaker, scanner.RoleLander:
+		return "high"
+	case scanner.RoleTracker, scanner.RoleDeepview:
+		return "medium"
+	case scanner.RoleDecoy:
+		return "info"
+	default:
+		return ""
+	}
 }

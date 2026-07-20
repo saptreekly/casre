@@ -185,6 +185,9 @@ func fetchHTTP(ctx context.Context, rawURL, host string, timeout time.Duration, 
 	}
 	result.Technologies = detectTech(resp.Header)
 
+	if captureBody && len(body) > 0 {
+		result.Body = body
+	}
 	if captureBody && len(body) > 0 && resp.StatusCode < 300 {
 		ct := resp.Header.Get("Content-Type")
 		result.Page = AnalyzePage(body, ct, firstNonEmpty(result.FinalURL, rawURL))
