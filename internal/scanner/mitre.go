@@ -65,6 +65,7 @@ type mitreRule struct {
 var mitreRules = []mitreRule{
 	{category: "phish", contains: []string{"cloud object storage"}, ids: []string{"T1583.006", "T1608.001", "T1566.002"}, conf: "high"},
 	{category: "phish", contains: []string{"brand impersonation"}, ids: []string{"T1656", "T1036.005", "T1566.002"}, conf: "high"},
+	{category: "phish", contains: []string{"phishing kit fingerprint"}, ids: []string{"T1608.001", "T1566.002", "T1204.001"}, conf: "high"},
 	{category: "phish", contains: []string{"turnstile", "fake browser check"}, ids: []string{"T1656", "T1036.005", "T1566.002"}, conf: "high"},
 	{category: "phish", contains: []string{"interstitial", "browser-check"}, ids: []string{"T1656", "T1036.005"}, conf: "medium"},
 	{category: "phish", contains: []string{"js/meta redirect", "meta refresh"}, ids: []string{"T1566.002", "T1204.001", "T1608.005"}, conf: "high"},
@@ -74,6 +75,9 @@ var mitreRules = []mitreRule{
 	{category: "phish", contains: []string{"download / payload"}, ids: []string{"T1204", "T1608.001", "T1566.002"}, conf: "high"},
 	{category: "phish", contains: []string{"app / deep-link", "deepview"}, ids: []string{"T1566.002", "T1204.001", "T1608.005"}, conf: "medium"},
 	{category: "phish", contains: []string{"external brand/logo"}, ids: []string{"T1656", "T1036.005"}, conf: "medium"},
+	{category: "fuzz", contains: []string{".env", ".git", "backup"}, ids: []string{"T1083", "T1005", "T1552.001"}, conf: "high"},
+	{category: "fuzz", contains: []string{"admin", "login", "wp-", "owa", "panel"}, ids: []string{"T1078", "T1190", "T1133"}, conf: "high"},
+	{category: "fuzz", contains: []string{"fuzz"}, ids: []string{"T1595.002", "T1190"}, conf: "medium"},
 
 	{category: "url", contains: []string{"sendgrid", "mailchimp", "mandrill", "sparkpost", "mailgun", "amazon ses", "click-tracking", "constant contact"}, ids: []string{"T1566.002", "T1583", "T1608.005"}, conf: "high"},
 	{category: "url", contains: []string{"branch app.link", "url shortener"}, ids: []string{"T1566.002", "T1608.005", "T1102"}, conf: "medium"},

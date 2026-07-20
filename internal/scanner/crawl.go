@@ -176,12 +176,12 @@ func CrawlFollow(
 					return
 				}
 
-				probe := ProbeURLHop(ctx, item.wire, cfg.Timeout, cfg.InsecureTLS)
-				host := HostFromURL(item.wire)
 				frag := fragmentOf(item.raw)
 				if frag == "" {
 					frag = seed.Fragment
 				}
+				probe := ProbeURLHop(ctx, item.wire, cfg.Timeout, cfg.InsecureTLS, frag)
+				host := HostFromURL(item.wire)
 				page := probe.Page
 
 				var hopFindings []Finding
@@ -538,6 +538,11 @@ func stitchFragment(dest, frag string) string {
 		return dest
 	}
 	if strings.Contains(dest, "#") {
+		return dest
+	}
+	// Already carries tracking as a query (JS reconstruction used the fragment).
+	payload := strings.TrimPrefix(strings.TrimSpace(frag), "?")
+	if payload != "" && (strings.Contains(dest, payload) || strings.Contains(dest, frag)) {
 		return dest
 	}
 	return dest + "#" + frag

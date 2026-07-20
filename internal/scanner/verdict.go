@@ -39,6 +39,8 @@ func BuildVerdict(r Result) *Verdict {
 				add(18, "fake browser check")
 			case strings.Contains(msg, "brand impersonation"):
 				add(12, "brand impersonation")
+			case strings.Contains(msg, "phishing kit fingerprint"):
+				add(14, "known cloaker kit")
 			case strings.Contains(msg, "password"):
 				add(18, "credential harvest form")
 			case strings.Contains(msg, "form posts off-site"):
@@ -63,6 +65,12 @@ func BuildVerdict(r Result) *Verdict {
 			default:
 				add(3, "medium phishing signal")
 			}
+		case f.Category == "fuzz" && f.Severity == "high":
+			add(10, "fuzz hit (sensitive path)")
+		case f.Category == "fuzz" && f.Severity == "medium":
+			add(5, "fuzz hit")
+		case f.Category == "fuzz":
+			add(2, "fuzz probe")
 		case f.Category == "url" && (strings.Contains(msg, "sendgrid") || strings.Contains(msg, "mailchimp") ||
 			strings.Contains(msg, "click-tracking") || strings.Contains(msg, "sparkpost") ||
 			strings.Contains(msg, "mailgun") || strings.Contains(msg, "amazon ses")):

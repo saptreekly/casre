@@ -1,142 +1,85 @@
 # CASRE — Concurrent Attack Surface Recon Engine
 
-High-speed Go CLI for external infrastructure recon and phishing URL investigation.
+Interactive TUI for phishing-URL investigation and light external recon.
 
-Maps DNS, TLS, banners, HTTP, CDN/ASN enrichment, and — for full URLs — campaign hop graphs, page signals, MITRE ATT&CK tags, a verdict score/narrative, and IOC indicators in the report.
+Paste a suspicious link, optionally tune crawl settings, scan, then walk the campaign story, redirect chain, alerts, IOCs, and host facts — without drowning in base64 query blobs.
 
 ## Install
 
 Requires [Go](https://go.dev/dl/) 1.22+.
 
 ```bash
-# Install latest to GOPATH/bin (ensure ~/go/bin is on PATH)
-go install github.com/saptreekly/casre/cmd/casre@latest
-
-# Or clone and build locally
 git clone https://github.com/saptreekly/casre.git
 cd casre
 go build -o ~/.local/bin/casre ./cmd/casre
 ```
 
-Confirm:
-
-```bash
-casre -h
-```
+Ensure `~/.local/bin` is on your `PATH`.
 
 ## Usage
 
-### Host recon
-
 ```bash
-casre example.com
-casre -v example.com
-casre -modules dns,tls,enrich -ports 22,80,443 scanme.nmap.org
+casre
 ```
 
-### Phishing / suspicious URLs
-
-Quote URLs so the shell does not treat `&` as a background operator.
+Needs an interactive terminal (TTY). Optional: pass URLs as arguments to pre-fill the targets box:
 
 ```bash
-casre 'https://storage.googleapis.com/bucket/lure.html#?act=cl&pid=1'
-casre -v 'https://bit.ly/suspicious'
-casre -budget 45 -hop-workers 12 'https://lure.example/path'
-casre -evidence ./evidence 'https://lure.example/path'
-casre -full-crawl -max-urls 40 'https://lure.example/path'  # broader spider
-casre -no-follow 'https://lure.example/path'                # single probe
+casre 'https://storage.googleapis.com/bucket/lure.html#?…'
 ```
 
-URL mode (default **campaign** crawl):
+### Home
 
-1. Follows ESP → cloaker → deepview → lander hop-by-hop (parallel probes)
-2. Classifies nodes (`tracker` / `cloaker` / `deepview` / `lander` / `decoy`) — landers require strong signals (cleartext from cloaker, credentials, suspicious TLD); brand deepview destinations are not auto-landers
-3. Stops expanding brand / CDN / social decoys
-4. Prints **VERDICT** (score + short narrative) and an **IOC** section in the tree
+1. Paste one or more URLs (one per line)
+2. **Scan** — `Tab` → Enter, or `Ctrl+S`
+3. Press `o` for **options** (crawl profiles, depth, max pages, path fuzzing, campaign mode)
 
-### Evidence snapshots
+### Results tabs (`1`–`6`)
 
-```bash
-casre -evidence ./evidence 'https://storage.googleapis.com/bucket/lure.html'
-```
+| Key | Tab | Contents |
+|-----|-----|----------|
+| `1` | **Story** | Verdict narrative, confidence, kill-chain timeline, blast radius, attribution, coverage gaps, technique mix |
+| `2` | **Chain** | Redirect hop graph with status, via, and role |
+| `3` | **Alerts** | Findings by severity (high/medium first; `i` toggles info) |
+| `4` | **Indicators** | Domains, IPs, URLs, ASNs |
+| `5` | **Host** | DNS, TLS, open ports, CDN/ASN enrichment |
+| `6` | **Diff** | Changes vs the previous scan after `r` rescan |
 
-Writes HTML files for **cloaker** and **lander** nodes into the directory and lists them under **EVIDENCE** in the report (also in JSON `evidence`).
+### Keys
 
-### Batch / JSON / diff
+| Key | Action |
+|-----|--------|
+| `1`–`6` | Switch tabs |
+| `↑` `↓` | Move selection (Story, Chain, Alerts, Indicators, Host) |
+| `c` | Copy selected value / URL |
+| `f` / Enter | Toggle full URL (Chain, Indicators) |
+| `i` | Show/hide info-severity alerts |
+| `r` | Rescan and compare |
+| `o` | Options (from home) |
+| `esc` | New scan |
+| `q` / `Ctrl+C` | Quit |
 
-```bash
-casre -f scope.txt
-casre -f urls.txt -json -c 200 -rate 100
+## Crawl profiles
 
-casre -o baseline.json example.com
-casre -diff baseline.json example.com
-```
+Set under **options** (`o`):
 
-## Flags
+| Profile | Behavior |
+|---------|----------|
+| **Quick** | Shallow campaign crawl, no path fuzz |
+| **Deep** | Longer chains + path fuzz on cloaker/lander hosts |
+| **Wide** | More pages, campaign mode off, path fuzz on |
+| **Custom** | Manual depth / max pages / toggles |
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `-c` | `100` | Max concurrent targets |
-| `-rate` | `50` | Global ops/sec (`0` = unlimited) |
-| `-timeout` | `3` | Per-connection timeout (seconds) |
-| `-budget` | auto | Wall-clock budget for URL hop crawl (seconds) |
-| `-ports` | `80,443,22` | TCP ports for banner grab |
-| `-modules` | `dns,tls,banner,http,enrich` | Modules to enable |
-| `-depth` | `5` | Max hop depth for URL graph crawl |
-| `-max-urls` | `25` | Max URLs to probe per graph |
-| `-hop-workers` | `8` | Parallel hop probes per URL target |
-| `-no-follow` | off | Disable automatic URL graph crawling |
-| `-full-crawl` | off | Disable campaign stops (follow decoys more) |
-| `-evidence` | | Save HTML snapshots of cloaker/lander pages to a directory |
-| `-v` | off | Verbose text (full SANs, info findings, more IOCs) |
-| `-o` | | Save full JSON report |
-| `-diff` | | Compare against a previous `-o` report |
-| `-json` | off | NDJSON to stdout |
-| `-q` | off | Quiet progress on stderr |
-| `-insecure` | off | Skip TLS certificate verification |
-| `-no-color` / `-color` | auto | ANSI color control |
+**Campaign mode** prefers ESP → cloaker → lander style chains and stops expanding brand/CDN/social decoys. **Path fuzzing** probes common kit/admin paths on lander hosts after the crawl.
 
-## Modules
+## What it looks for
 
-| Module | What it does |
-|--------|----------------|
-| **dns** | A, AAAA, CNAME, MX, NS, TXT (+ SPF/DMARC signals) |
-| **tls** | Handshake version, cipher, cert chain, SANs, expiry |
-| **banner** | TCP connect + banner grab on selected ports |
-| **http** | Redirects, headers, security-header gaps, tech fingerprints, page analysis |
-| **enrich** | CDN detection, Team Cymru ASN, mail/hosting hints |
-
-## Verdict & campaign graph
-
-Each result includes a **VERDICT** block:
-
-- `score` — 0–100 risk from phishing/recon signals
-- `story` — short chain narrative (e.g. `fake CF interstitial → cleartext lander`)
-- `signals` — top contributing reasons
-
-Graph nodes are labeled by role. Campaign mode follows delivery infrastructure and landers; decoys (social, app stores, major CDNs/brands) are visited once and not expanded. Use `-full-crawl` when you intentionally want broader spidering.
-
-## IOC indicators
-
-Each report includes an **IOC** tree section (always on) with deduped:
-
-| type | examples |
-|------|----------|
-| `domain` | lander / tracker hosts |
-| `ip` | resolved A/AAAA |
-| `url` | seed, hops, destinations, downloads |
-| `asn` | Team Cymru enrich hits |
-
-Long URL lists are truncated unless you pass `-v`. JSON output includes an `iocs` object per target.
-
-## MITRE ATT&CK
-
-Findings are tagged with relevant [ATT&CK](https://attack.mitre.org/) techniques (always on). Tags appear on each finding and as a deduped **MITRE** rollup in text output; JSON includes `mitre` on each finding plus a top-level `mitre` array.
-
-Coverage focuses on what CASRE can observe: phishing delivery, lure staging (cloud buckets, deepviews), impersonation, and redirect chains — with confidence (`high` / `medium` / `low`). Post-compromise tactics are out of scope.
-
-Low-confidence rollup rows are hidden unless you pass `-v`.
+- Redirect / cloaker patterns (`location` assigns, concat deobfuscation, `atob`, kit fingerprints)
+- Brand impersonation (Microsoft 365, Apple, Google, DocuSign, PayPal, Okta, banks, shipping, and others)
+- Cloudflare Turnstile and cloud-storage hosting signals
+- DNS, TLS, banners, HTTP, ASN/CDN enrichment
+- MITRE ATT&CK tags on findings where mapped
 
 ## Authorization
 
-Only scan hosts and URLs you own or have explicit permission to test.
+Use only against systems you are authorized to test.

@@ -1,6 +1,7 @@
 package diff_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -39,11 +40,45 @@ func TestCompareDetectsDNSChange(t *testing.T) {
 	}
 }
 
-func TestCompareAddedHost(t *testing.T) {
-	old := &diff.Report{Results: nil}
-	neu := &diff.Report{Results: []scanner.Result{{Host: "new.example"}}}
+func TestCompareVerdictAndFindings(t *testing.T) {
+	old := &diff.Report{Results: []scanner.Result{{
+		Host:      "example.com",
+		InputURL:  "https://example.com/lure",
+		FinalHost: "a.example",
+		Verdict:   &scanner.Verdict{Score: 40, Label: "suspicious"},
+		Findings:  []scanner.Finding{{Severity: "high", Category: "phish", Message: "old alert"}},
+		Hops:      []scanner.HopDetail{{Host: "example.com"}, {Host: "a.example"}},
+	}}}
+	neu := &diff.Report{Results: []scanner.Result{{
+		Host:      "example.com",
+		InputURL:  "https://example.com/lure",
+		FinalHost: "b.example",
+		Verdict:   &scanner.Verdict{Score: 85, Label: "malicious"},
+		Findings: []scanner.Finding{
+			{Severity: "high", Category: "phish", Message: "old alert"},
+			{Severity: "high", Category: "phish", Message: "new alert"},
+		},
+		Hops: []scanner.HopDetail{{Host: "example.com"}, {Host: "b.example"}},
+	}}}
 	changes := diff.Compare(old, neu)
-	if len(changes) != 1 || changes[0].Kind != "added" {
-		t.Fatalf("expected added host, got %+v", changes)
+	wantFields := map[string]bool{"verdict.score": false, "verdict.label": false, "final_host": false, "finding": false}
+	for _, c := range changes {
+		if c.Field == "verdict.score" && c.Before == "40" && c.After == "85" {
+			wantFields["verdict.score"] = true
+		}
+		if c.Field == "verdict.label" {
+			wantFields["verdict.label"] = true
+		}
+		if c.Field == "final_host" && c.After == "b.example" {
+			wantFields["final_host"] = true
+		}
+		if c.Field == "finding" && c.Kind == "added" && strings.Contains(c.After, "new alert") {
+			wantFields["finding"] = true
+		}
+	}
+	for k, ok := range wantFields {
+		if !ok {
+			t.Fatalf("missing %s in %+v", k, changes)
+		}
 	}
 }

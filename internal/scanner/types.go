@@ -23,8 +23,9 @@ type Result struct {
 	Enrich    *Enrichment  `json:"enrichment,omitempty"`
 	Findings  []Finding    `json:"findings,omitempty"`
 	Mitre     []MitreHit   `json:"mitre,omitempty"`
-	Verdict   *Verdict     `json:"verdict,omitempty"`
-	IOCs      *IOCSet      `json:"iocs,omitempty"`
+	Verdict       *Verdict       `json:"verdict,omitempty"`
+	Investigation *Investigation `json:"investigation,omitempty"`
+	IOCs          *IOCSet        `json:"iocs,omitempty"`
 	Evidence  []Evidence   `json:"evidence,omitempty"`
 	Errors    []string     `json:"errors,omitempty"`
 	Duration  string       `json:"duration"`

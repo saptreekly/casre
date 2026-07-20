@@ -35,6 +35,7 @@ type PageAnalysis struct {
 	CloudStorageHost   bool       `json:"cloud_storage_host,omitempty"`
 	Deepview           string     `json:"deepview,omitempty"` // branch, appsflyer, etc.
 	BrandImpersonation []string   `json:"brand_impersonation,omitempty"`
+	Kits               []string   `json:"kits,omitempty"` // named cloaker / phishing-kit fingerprints
 	Destinations       []string   `json:"destinations,omitempty"` // resolved external next-hops
 }
 
@@ -53,18 +54,24 @@ var (
 	reMethod         = regexp.MustCompile(`(?i)\bmethod\s*=\s*["']([^"']*)["']`)
 	rePassword       = regexp.MustCompile(`(?is)<input[^>]+type\s*=\s*["']password["']`)
 	reTurnstile      = regexp.MustCompile(`(?is)cf-turnstile|challenges\.cloudflare\.com/turnstile`)
-	reJSLoc          = regexp.MustCompile(`(?is)(?:window\.)?(?:top\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']`)
-	reJSReplace      = regexp.MustCompile(`(?is)(?:window\.)?(?:top\.)?location\.replace\(\s*["']([^"']+)["']`)
-	reJSAssignHref   = regexp.MustCompile(`(?is)(?:window\.)?location\.href\s*=\s*["'](https?://[^"']+)["']\s*\+`)
+	reJSLoc          = regexp.MustCompile(`(?is)(?:window\.)?(?:document\.)?(?:top\.)?(?:self\.)?location(?:\.href)?\s*=\s*["']([^"']+)["']`)
+	reJSReplace      = regexp.MustCompile(`(?is)(?:window\.)?(?:document\.)?(?:top\.)?(?:self\.)?location\.replace\(\s*["']([^"']+)["']`)
+	reJSAssignHref   = regexp.MustCompile(`(?is)(?:window\.)?(?:document\.)?(?:top\.)?(?:self\.)?location\.href\s*=\s*["'](https?://[^"']+)["']\s*\+`)
 	reAbsURLInJS     = regexp.MustCompile(`(?is)["'](https?://[^"'\s]+)["']\s*\+\s*(?:window\.)?location\.hash`)
 	reValidateProto  = regexp.MustCompile(`(?is)validateProtocol\(\s*["']([^"']+)["']\s*\)`)
 	reQuotedHTTP     = regexp.MustCompile(`(?is)["'](https?://[^"'\s]+)["']`)
+	// 'http://'+srv_ip+'/?'+tracking_param  (and similar protocol+hostVar[+pathLit[+trackVar]])
+	reJSProtoHostVar = regexp.MustCompile(`(?is)(?:window\.)?(?:document\.)?(?:top\.)?(?:self\.)?location(?:\.href)?\s*=\s*["'](https?://)["']\s*\+\s*([A-Za-z_$][\w$]*)\s*(?:\+\s*["']([^"']*)["'])?(?:\+\s*([A-Za-z_$][\w$]*))?`)
+	reJSStringAssign = regexp.MustCompile(`(?is)(?:(?:var|let|const)\s+)?([A-Za-z_$][\w$]*)\s*=\s*["']([^"']+)["']`)
+	reJSHashSplit    = regexp.MustCompile(`(?is)(?:(?:var|let|const)\s+)?([A-Za-z_$][\w$]*)\s*=\s*(?:window\.)?location\.href\.split\(\s*['"]#['"]\s*\)\s*\[\s*1\s*]`)
+	reJSHashDirect   = regexp.MustCompile(`(?is)(?:(?:var|let|const)\s+)?([A-Za-z_$][\w$]*)\s*=\s*(?:window\.)?location\.hash`)
 	reCheckingBrowser = regexp.MustCompile(`(?i)checking your browser|just a moment|review your connection security|verification complete|ddos protection by`)
 	reDownloadExt    = regexp.MustCompile(`(?i)\.(?:apk|ipa|exe|dmg|pkg|msi|zip|rar|7z|vbs|scr|pdf)(?:\?|#|$)`)
 )
 
 // AnalyzePage extracts phishing-relevant signals from an HTML (or HTML-ish) body.
-func AnalyzePage(body []byte, contentType, pageURL string) *PageAnalysis {
+// fragment is the client-only #... part of the page URL (used to reconstruct tracking redirects).
+func AnalyzePage(body []byte, contentType, pageURL, fragment string) *PageAnalysis {
 	if len(body) == 0 {
 		return nil
 	}
@@ -107,13 +114,42 @@ func AnalyzePage(body []byte, contentType, pageURL string) *PageAnalysis {
 		}
 	}
 
-	for _, re := range []*regexp.Regexp{reJSLoc, reJSReplace, reJSAssignHref, reAbsURLInJS, reValidateProto} {
-		for _, m := range re.FindAllStringSubmatch(text, -1) {
-			if len(m) < 2 {
-				continue
+	for _, u := range reconstructJSVarRedirects(text, fragment) {
+		if isNavigableHTTPURL(u) {
+			p.JSRedirects = appendUnique(p.JSRedirects, u)
+		}
+	}
+
+	collapsed := collapseJSStringConcats(text)
+	for _, src := range []string{text, collapsed} {
+		for _, re := range []*regexp.Regexp{reJSLoc, reJSReplace, reJSAssignHref, reAbsURLInJS, reValidateProto} {
+			for _, m := range re.FindAllStringSubmatch(src, -1) {
+				if len(m) < 2 {
+					continue
+				}
+				if abs := absolutize(pageURL, m[1]); abs != "" && isNavigableHTTPURL(abs) {
+					p.JSRedirects = appendUnique(p.JSRedirects, abs)
+				}
 			}
-			if abs := absolutize(pageURL, m[1]); abs != "" {
-				p.JSRedirects = appendUnique(p.JSRedirects, abs)
+		}
+	}
+	for _, u := range extractAssignRedirects(text, pageURL) {
+		p.JSRedirects = appendUnique(p.JSRedirects, u)
+	}
+	for _, u := range extractAtobRedirects(text, pageURL) {
+		p.JSRedirects = appendUnique(p.JSRedirects, u)
+	}
+	// Only keep collapsed-literal URLs that look like redirect targets (not every CDN asset).
+	if collapsed != text {
+		for _, u := range extractCollapsedLiteralRedirects(collapsed, pageURL) {
+			if isLikelyDestination(u, baseHost) || IsIPHost(HostFromURL(u)) {
+				p.JSRedirects = appendUnique(p.JSRedirects, u)
+			}
+		}
+		// Also re-run IP-var reconstruction on collapsed text.
+		for _, u := range reconstructJSVarRedirects(collapsed, fragment) {
+			if isNavigableHTTPURL(u) {
+				p.JSRedirects = appendUnique(p.JSRedirects, u)
 			}
 		}
 	}
@@ -205,6 +241,7 @@ func AnalyzePage(body []byte, contentType, pageURL string) *PageAnalysis {
 	p.HasTurnstile = reTurnstile.MatchString(text)
 
 	p.BrandImpersonation = detectBrandImpersonation(text, baseHost, p)
+	p.Kits = detectKits(text, p)
 
 	// Destinations = navigable external next hops (explicit redirects + deepview embeds).
 	cands := append([]string{}, p.MetaRefresh...)
@@ -300,6 +337,132 @@ func isHTTPURL(u string) bool {
 	return strings.HasPrefix(l, "http://") || strings.HasPrefix(l, "https://")
 }
 
+// isNavigableHTTPURL rejects incomplete captures like "http://" or "http:".
+func isNavigableHTTPURL(u string) bool {
+	if !isHTTPURL(u) {
+		return false
+	}
+	parsed, err := url.Parse(u)
+	if err != nil || parsed.Host == "" || parsed.Hostname() == "" {
+		return false
+	}
+	return true
+}
+
+// reconstructJSVarRedirects resolves 'http://'+srv_ip+'/?'+tracking patterns.
+func reconstructJSVarRedirects(text, fragment string) []string {
+	vars := extractJSStringVars(text)
+	hashVars := extractJSHashDerivedVars(text)
+	var out []string
+	for _, m := range reJSProtoHostVar.FindAllStringSubmatch(text, -1) {
+		if len(m) < 3 {
+			continue
+		}
+		proto, hostVar := m[1], m[2]
+		pathLit, trackVar := "", ""
+		if len(m) > 3 {
+			pathLit = m[3]
+		}
+		if len(m) > 4 {
+			trackVar = m[4]
+		}
+		hostVal := strings.TrimSpace(vars[hostVar])
+		if hostVal == "" || !looksLikeHostOrIP(hostVal) {
+			continue
+		}
+		dest := proto + hostVal
+		if pathLit != "" {
+			dest += pathLit
+		} else {
+			dest += "/"
+		}
+		if trackVar != "" && fragment != "" && (hashVars[trackVar] || looksLikeTrackingVar(trackVar)) {
+			dest = appendTrackingQuery(dest, fragment)
+		} else {
+			dest = strings.TrimSuffix(dest, "?")
+		}
+		if isNavigableHTTPURL(dest) {
+			out = appendUnique(out, dest)
+		}
+	}
+	return out
+}
+
+func extractJSStringVars(text string) map[string]string {
+	out := make(map[string]string)
+	for _, m := range reJSStringAssign.FindAllStringSubmatch(text, -1) {
+		if len(m) < 3 {
+			continue
+		}
+		name, val := m[1], strings.TrimSpace(m[2])
+		if name == "" || val == "" {
+			continue
+		}
+		// Prefer host/IP literals; keep first assignment.
+		if _, ok := out[name]; ok {
+			continue
+		}
+		out[name] = val
+	}
+	return out
+}
+
+func extractJSHashDerivedVars(text string) map[string]bool {
+	out := make(map[string]bool)
+	for _, re := range []*regexp.Regexp{reJSHashSplit, reJSHashDirect} {
+		for _, m := range re.FindAllStringSubmatch(text, -1) {
+			if len(m) > 1 && m[1] != "" {
+				out[m[1]] = true
+			}
+		}
+	}
+	return out
+}
+
+func looksLikeHostOrIP(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.ContainsAny(s, "/?# ") {
+		return false
+	}
+	if IsIPHost(s) {
+		return true
+	}
+	// Basic hostname: has a dot, no scheme.
+	if strings.Contains(s, "://") {
+		return false
+	}
+	if !strings.Contains(s, ".") {
+		return false
+	}
+	for _, r := range s {
+		if !(r == '.' || r == '-' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
+}
+
+func looksLikeTrackingVar(name string) bool {
+	l := strings.ToLower(name)
+	return strings.Contains(l, "track") || strings.Contains(l, "hash") ||
+		strings.Contains(l, "param") || strings.Contains(l, "frag") ||
+		strings.Contains(l, "query") || strings.Contains(l, "campaign")
+}
+
+// appendTrackingQuery joins a base ending in /? or / with a fragment payload as a query string.
+func appendTrackingQuery(base, frag string) string {
+	frag = strings.TrimSpace(frag)
+	if frag == "" {
+		return strings.TrimSuffix(base, "?")
+	}
+	base = strings.TrimSuffix(base, "?")
+	payload := strings.TrimPrefix(frag, "?")
+	if !strings.HasSuffix(base, "/") && !strings.Contains(strings.TrimPrefix(strings.TrimPrefix(base, "https://"), "http://"), "/") {
+		base += "/"
+	}
+	return base + "?" + payload
+}
+
 // PageFindings converts page analysis into actionable phishing findings.
 func PageFindings(pageURL string, page *PageAnalysis) []Finding {
 	if page == nil {
@@ -321,6 +484,14 @@ func PageFindings(pageURL string, page *PageAnalysis) []Finding {
 			Severity: "high",
 			Category: "phish",
 			Message:  "brand impersonation: " + brand,
+		})
+	}
+
+	for _, kit := range page.Kits {
+		findings = append(findings, Finding{
+			Severity: "high",
+			Category: "phish",
+			Message:  "phishing kit fingerprint: " + kit,
 		})
 	}
 
@@ -448,37 +619,6 @@ func PageFindings(pageURL string, page *PageAnalysis) []Finding {
 	return findings
 }
 
-func detectBrandImpersonation(text, host string, p *PageAnalysis) []string {
-	var out []string
-	lower := strings.ToLower(text)
-	if !isCloudflareHost(host) {
-		if strings.Contains(lower, "cloudflare") || p.HasTurnstile ||
-			strings.Contains(lower, "checking your browser") ||
-			strings.Contains(lower, "just a moment") {
-			out = appendUnique(out, "Cloudflare interstitial/turnstile clone")
-		}
-		for _, img := range p.ExternalImages {
-			if strings.Contains(strings.ToLower(img), "cloudflare") {
-				out = appendUnique(out, "Cloudflare logo asset on foreign host")
-			}
-		}
-	}
-	if !strings.Contains(strings.ToLower(host), "microsoft") &&
-		(strings.Contains(lower, "microsoft 365") || strings.Contains(lower, "office 365") ||
-			strings.Contains(lower, "outlook web")) {
-		out = appendUnique(out, "Microsoft 365 / Outlook language")
-	}
-	if !strings.Contains(strings.ToLower(host), "apple") &&
-		(strings.Contains(lower, "apple id") || strings.Contains(lower, "icloud")) {
-		out = appendUnique(out, "Apple ID / iCloud language")
-	}
-	if !strings.Contains(strings.ToLower(host), "google") && !isCloudStorageHost(host) &&
-		(strings.Contains(lower, "google account") || strings.Contains(lower, "sign in with google")) {
-		out = appendUnique(out, "Google account language")
-	}
-	return out
-}
-
 func isCloudStorageHost(host string) bool {
 	h := strings.ToLower(host)
 	switch {
@@ -505,9 +645,17 @@ func isCloudflareHost(host string) bool {
 
 func looksLikeBrandAsset(u string) bool {
 	l := strings.ToLower(u)
-	return strings.Contains(l, "logo") || strings.Contains(l, "cloudflare") ||
-		strings.Contains(l, "microsoft") || strings.Contains(l, "apple") ||
-		strings.Contains(l, "paypal") || strings.Contains(l, "1000logos")
+	keys := []string{
+		"logo", "cloudflare", "microsoft", "apple", "paypal", "1000logos",
+		"docusign", "fedex", "ups", "usps", "dhl", "okta", "adobe", "acrobat",
+		"linkedin", "chase", "wellsfargo", "bankofamerica",
+	}
+	for _, k := range keys {
+		if strings.Contains(l, k) {
+			return true
+		}
+	}
+	return false
 }
 
 func absolutize(base, ref string) string {

@@ -57,46 +57,67 @@ func SaveReport(path string, results []scanner.Result) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
-// Compare returns changes from old → new keyed by host.
+// Compare returns changes from old → new keyed by host (or input URL when present).
 func Compare(old, neu *Report) []Change {
-	oldMap := indexByHost(old.Results)
-	newMap := indexByHost(neu.Results)
+	oldMap := indexResults(old.Results)
+	newMap := indexResults(neu.Results)
 
-	hosts := map[string]struct{}{}
-	for h := range oldMap {
-		hosts[h] = struct{}{}
+	keys := map[string]struct{}{}
+	for k := range oldMap {
+		keys[k] = struct{}{}
 	}
-	for h := range newMap {
-		hosts[h] = struct{}{}
+	for k := range newMap {
+		keys[k] = struct{}{}
 	}
-	names := make([]string, 0, len(hosts))
-	for h := range hosts {
-		names = append(names, h)
+	names := make([]string, 0, len(keys))
+	for k := range keys {
+		names = append(names, k)
 	}
 	sort.Strings(names)
 
 	var changes []Change
-	for _, h := range names {
-		o, okOld := oldMap[h]
-		n, okNew := newMap[h]
+	for _, k := range names {
+		o, okOld := oldMap[k]
+		n, okNew := newMap[k]
+		display := displayHost(o, n, k)
 		switch {
 		case !okOld:
-			changes = append(changes, Change{Host: h, Kind: "added", Field: "host", After: h})
+			changes = append(changes, Change{Host: display, Kind: "added", Field: "host", After: display})
 		case !okNew:
-			changes = append(changes, Change{Host: h, Kind: "removed", Field: "host", Before: h})
+			changes = append(changes, Change{Host: display, Kind: "removed", Field: "host", Before: display})
 		default:
-			changes = append(changes, diffHost(h, o, n)...)
+			changes = append(changes, diffHost(display, o, n)...)
 		}
 	}
 	return changes
 }
 
-func indexByHost(results []scanner.Result) map[string]scanner.Result {
+func indexResults(results []scanner.Result) map[string]scanner.Result {
 	m := make(map[string]scanner.Result, len(results))
 	for _, r := range results {
-		m[strings.ToLower(r.Host)] = r
+		m[resultKey(r)] = r
 	}
 	return m
+}
+
+func resultKey(r scanner.Result) string {
+	if r.InputURL != "" {
+		return "url:" + strings.ToLower(r.InputURL)
+	}
+	if r.RawInput != "" {
+		return "raw:" + strings.ToLower(r.RawInput)
+	}
+	return "host:" + strings.ToLower(r.Host)
+}
+
+func displayHost(old, neu scanner.Result, key string) string {
+	if neu.Host != "" {
+		return neu.Host
+	}
+	if old.Host != "" {
+		return old.Host
+	}
+	return strings.TrimPrefix(strings.TrimPrefix(strings.TrimPrefix(key, "url:"), "raw:"), "host:")
 }
 
 func diffHost(host string, old, neu scanner.Result) []Change {
@@ -136,7 +157,134 @@ func diffHost(host string, old, neu scanner.Result) []Change {
 	add("enrich.cdn", enrichCDN(old.Enrich), enrichCDN(neu.Enrich))
 	add("enrich.asn", enrichASN(old.Enrich), enrichASN(neu.Enrich))
 
+	add("verdict.score", verdictScore(old), verdictScore(neu))
+	add("verdict.label", verdictLabel(old), verdictLabel(neu))
+	add("final_host", old.FinalHost, neu.FinalHost)
+	add("campaign.path", campaignPath(old), campaignPath(neu))
+	add("hops", hopHosts(old), hopHosts(neu))
+	add("brands", brandsSummary(old), brandsSummary(neu))
+	add("kits", kitsSummary(old), kitsSummary(neu))
+
+	out = append(out, diffFindings(host, old.Findings, neu.Findings)...)
+
 	return out
+}
+
+func verdictScore(r scanner.Result) string {
+	if r.Verdict == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d", r.Verdict.Score)
+}
+
+func verdictLabel(r scanner.Result) string {
+	if r.Verdict == nil {
+		return ""
+	}
+	return r.Verdict.Label
+}
+
+func campaignPath(r scanner.Result) string {
+	var hosts []string
+	if r.Graph != nil {
+		for _, n := range r.Graph.Nodes {
+			if n.Host != "" {
+				hosts = append(hosts, n.Host)
+			}
+		}
+	}
+	if len(hosts) == 0 {
+		for _, h := range r.Hops {
+			if h.Host != "" {
+				hosts = append(hosts, h.Host)
+			}
+		}
+	}
+	return strings.Join(hosts, " → ")
+}
+
+func hopHosts(r scanner.Result) string {
+	var hosts []string
+	seen := map[string]struct{}{}
+	for _, h := range r.Hops {
+		if h.Host == "" {
+			continue
+		}
+		key := strings.ToLower(h.Host)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		hosts = append(hosts, h.Host)
+	}
+	if len(hosts) == 0 && r.Graph != nil {
+		for _, n := range r.Graph.Nodes {
+			if n.Host == "" {
+				continue
+			}
+			key := strings.ToLower(n.Host)
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			hosts = append(hosts, n.Host)
+		}
+	}
+	return strings.Join(hosts, ",")
+}
+
+func brandsSummary(r scanner.Result) string {
+	if r.Page == nil {
+		return ""
+	}
+	vals := append([]string{}, r.Page.BrandImpersonation...)
+	sort.Strings(vals)
+	return strings.Join(vals, "; ")
+}
+
+func kitsSummary(r scanner.Result) string {
+	if r.Page == nil {
+		return ""
+	}
+	vals := append([]string{}, r.Page.Kits...)
+	sort.Strings(vals)
+	return strings.Join(vals, "; ")
+}
+
+func diffFindings(host string, old, neu []scanner.Finding) []Change {
+	oldSet := map[string]struct{}{}
+	newSet := map[string]struct{}{}
+	for _, f := range old {
+		oldSet[findingKey(f)] = struct{}{}
+	}
+	for _, f := range neu {
+		newSet[findingKey(f)] = struct{}{}
+	}
+	var out []Change
+	var added, removed []string
+	for k := range newSet {
+		if _, ok := oldSet[k]; !ok {
+			added = append(added, k)
+		}
+	}
+	for k := range oldSet {
+		if _, ok := newSet[k]; !ok {
+			removed = append(removed, k)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(removed)
+	for _, k := range added {
+		out = append(out, Change{Host: host, Kind: "added", Field: "finding", After: k})
+	}
+	for _, k := range removed {
+		out = append(out, Change{Host: host, Kind: "removed", Field: "finding", Before: k})
+	}
+	return out
+}
+
+func findingKey(f scanner.Finding) string {
+	return strings.ToUpper(f.Severity) + " · " + f.Category + " · " + f.Message
 }
 
 func join(d *scanner.DNSResult, fn func(*scanner.DNSResult) []string) string {
@@ -238,9 +386,23 @@ func FormatText(changes []Change, color bool) string {
 		for _, c := range byHost[h] {
 			switch c.Kind {
 			case "added":
-				fmt.Fprintf(&b, "  %s+ added%s\n", green, reset)
+				if c.Field == "finding" {
+					fmt.Fprintf(&b, "  %s+ finding%s %s\n", green, reset, truncate(c.After, 100))
+				} else {
+					fmt.Fprintf(&b, "  %s+ %s%s\n", green, c.Field, reset)
+					if c.After != "" {
+						fmt.Fprintf(&b, "      %s+ %s%s\n", green, truncate(c.After, 100), reset)
+					}
+				}
 			case "removed":
-				fmt.Fprintf(&b, "  %s- removed%s\n", red, reset)
+				if c.Field == "finding" {
+					fmt.Fprintf(&b, "  %s- finding%s %s\n", red, reset, truncate(c.Before, 100))
+				} else {
+					fmt.Fprintf(&b, "  %s- %s%s\n", red, c.Field, reset)
+					if c.Before != "" {
+						fmt.Fprintf(&b, "      %s- %s%s\n", red, truncate(c.Before, 100), reset)
+					}
+				}
 			default:
 				fmt.Fprintf(&b, "  ~ %s\n", c.Field)
 				if c.Before != "" {

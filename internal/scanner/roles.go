@@ -70,13 +70,16 @@ func ClassifyNodeRoleCtx(host, rawURL string, page *PageAnalysis, probe *HTTPRes
 }
 
 func isCloakerPage(page *PageAnalysis) bool {
-	if page.HasTurnstile || len(page.BrandImpersonation) > 0 {
+	if page.HasTurnstile || len(page.BrandImpersonation) > 0 || len(page.Kits) > 0 {
 		return true
 	}
 	if page.CloudStorageHost && strings.Contains(strings.ToLower(page.ContentType), "html") {
 		return true
 	}
 	if reCheckingBrowser.MatchString(page.Title) {
+		return true
+	}
+	if len(page.JSRedirects) > 0 && (page.CloudStorageHost || len(page.MetaRefresh) > 0) {
 		return true
 	}
 	return false

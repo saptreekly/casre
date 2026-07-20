@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/saptreekly/casre/internal/scanner"
@@ -57,19 +58,20 @@ func NewTextWriter(w io.Writer, opt TextOptions) *TextWriter {
 func (t *TextWriter) Write(r scanner.Result) error {
 	var b strings.Builder
 	c := t.c
+	width := displayWidth()
 
 	fmt.Fprintf(&b, "\n%s%s%s  %s%s%s\n",
 		c.bold, r.Host, c.reset,
 		c.dim, r.Duration, c.reset,
 	)
 	if r.RawInput != "" {
-		fmt.Fprintf(&b, "%s%s%s\n", c.dim, truncateMiddle(r.RawInput, 88), c.reset)
+		fmt.Fprintf(&b, "%s%s%s\n", c.dim, truncateMiddle(r.RawInput, min(width-2, 96)), c.reset)
 	} else if r.InputURL != "" {
-		fmt.Fprintf(&b, "%s%s%s\n", c.dim, truncateMiddle(r.InputURL, 88), c.reset)
+		fmt.Fprintf(&b, "%s%s%s\n", c.dim, truncateMiddle(r.InputURL, min(width-2, 96)), c.reset)
 	}
 
 	if r.Verdict != nil {
-		writeVerdict(&b, c, r.Verdict)
+		writeVerdict(&b, c, r.Verdict, width)
 		b.WriteByte('\n')
 	}
 
@@ -77,6 +79,8 @@ func (t *TextWriter) Write(r scanner.Result) error {
 	for si, sec := range sections {
 		lastSec := si == len(sections)-1
 		fmt.Fprintf(&b, "%s%s%s\n", c.section, sec.title, c.reset)
+
+		keyWidth := sectionKeyWidth(sec.lines)
 
 		// Precompute which top-level rows are last among top-level siblings.
 		topLast := map[int]bool{}
@@ -106,7 +110,7 @@ func (t *TextWriter) Write(r scanner.Result) error {
 			if line.child && parentIsLast {
 				guide = "   "
 			}
-			renderTreeLine(&b, c, prefix, guide, line)
+			renderTreeLine(&b, c, prefix, guide, line, keyWidth, width)
 		}
 		if !lastSec {
 			b.WriteByte('\n')
@@ -117,7 +121,7 @@ func (t *TextWriter) Write(r scanner.Result) error {
 	return err
 }
 
-func writeVerdict(b *strings.Builder, c palette, v *scanner.Verdict) {
+func writeVerdict(b *strings.Builder, c palette, v *scanner.Verdict, width int) {
 	sev := verdictSev(v.Label)
 	fmt.Fprintf(b, "%sVERDICT%s\n", c.section, c.reset)
 	rows := []treeLine{
@@ -129,9 +133,10 @@ func writeVerdict(b *strings.Builder, c palette, v *scanner.Verdict) {
 	if len(v.Signals) > 0 {
 		rows = append(rows, treeLine{key: "signals", value: strings.Join(v.Signals, " · "), sev: "info"})
 	}
+	kw := sectionKeyWidth(rows)
 	for i, line := range rows {
 		prefix, _ := treePrefix(i == len(rows)-1)
-		renderTreeLine(b, c, prefix, "│  ", line)
+		renderTreeLine(b, c, prefix, "│  ", line, kw, width)
 	}
 }
 
@@ -408,11 +413,11 @@ func collectSections(r scanner.Result, verbose bool) []section {
 
 	if r.DNS != nil {
 		var lines []treeLine
-		lines = appendKV(lines, "A", r.DNS.A)
-		lines = appendKV(lines, "AAAA", r.DNS.AAAA)
-		lines = appendKV(lines, "CNAME", r.DNS.CNAME)
-		lines = appendKV(lines, "MX", r.DNS.MX)
-		lines = appendKV(lines, "NS", r.DNS.NS)
+		lines = appendKVLimited(lines, "A", r.DNS.A, 4, verbose)
+		lines = appendKVLimited(lines, "AAAA", r.DNS.AAAA, 2, verbose)
+		lines = appendKVLimited(lines, "CNAME", r.DNS.CNAME, 6, verbose)
+		lines = appendKVLimited(lines, "MX", r.DNS.MX, 6, verbose)
+		lines = appendKVLimited(lines, "NS", r.DNS.NS, 6, verbose)
 		lines = append(lines, txtLines(r.DNS.TXT, verbose)...)
 		if len(lines) > 0 {
 			out = append(out, section{title: "DNS", lines: lines})
@@ -612,12 +617,14 @@ func collectSections(r scanner.Result, verbose bool) []section {
 			})
 			for _, f := range items {
 				msg := f.Message
+				var cont []string
 				if tags := scanner.FormatMitreIDs(f.Mitre); tags != "" {
-					msg = msg + "  [" + tags + "]"
+					cont = []string{"[" + tags + "]"}
 				}
 				lines = append(lines, treeLine{
 					key:   f.Category,
 					value: msg,
+					cont:  cont,
 					sev:   sev,
 					child: true,
 				})
@@ -743,10 +750,24 @@ func iocGroupSev(items []scanner.IOC) string {
 }
 
 func appendKV(lines []treeLine, key string, vals []string) []treeLine {
+	return appendKVLimited(lines, key, vals, 0, true)
+}
+
+func appendKVLimited(lines []treeLine, key string, vals []string, limit int, verbose bool) []treeLine {
 	if len(vals) == 0 {
 		return lines
 	}
-	return append(lines, treeLine{key: key, value: vals[0], cont: vals[1:]})
+	show := vals
+	extra := 0
+	if !verbose && limit > 0 && len(show) > limit {
+		extra = len(show) - limit
+		show = show[:limit]
+	}
+	cont := append([]string{}, show[1:]...)
+	if extra > 0 {
+		cont = append(cont, fmt.Sprintf("+%d more (use -v)", extra))
+	}
+	return append(lines, treeLine{key: key, value: show[0], cont: cont})
 }
 
 func txtLines(txts []string, verbose bool) []treeLine {
@@ -824,16 +845,40 @@ func treePrefix(last bool) (branch, pad string) {
 	return "├─ ", "│  "
 }
 
-func renderTreeLine(b *strings.Builder, c palette, branch, guide string, line treeLine) {
+func sectionKeyWidth(lines []treeLine) int {
+	w := 8
+	for _, line := range lines {
+		k := len(line.key)
+		if k > 40 {
+			k = 40
+		}
+		if k > w {
+			if k <= 12 {
+				w = k
+			} else if w < 12 {
+				w = 12
+			}
+		}
+	}
+	return w
+}
+
+func displayWidth() int {
+	if c := os.Getenv("COLUMNS"); c != "" {
+		if n, err := strconv.Atoi(c); err == nil && n >= 60 {
+			return n
+		}
+	}
+	return 100
+}
+
+func renderTreeLine(b *strings.Builder, c palette, branch, guide string, line treeLine, keyWidth, maxWidth int) {
 	indent := ""
-	keyWidth := 8
 	if line.child {
 		indent = guide
-	} else if len(line.key) > keyWidth {
-		keyWidth = len(line.key)
-		if keyWidth > 40 {
-			keyWidth = 40
-		}
+	}
+	if keyWidth < 8 {
+		keyWidth = 8
 	}
 
 	key := line.key
@@ -855,12 +900,6 @@ func renderTreeLine(b *strings.Builder, c palette, branch, guide string, line tr
 		valColor = c.ok
 	}
 
-	fmt.Fprintf(b, "%s%s%s%s%s%-*s%s %s%s%s\n",
-		c.dim, indent, branch, c.reset,
-		c.dim, keyWidth, key, c.reset,
-		valColor, line.value, c.reset,
-	)
-
 	contGuide := indent
 	if !line.child {
 		if branch == "└─ " {
@@ -871,9 +910,89 @@ func renderTreeLine(b *strings.Builder, c palette, branch, guide string, line tr
 	}
 	// Align wrapped values under the first value column.
 	contPad := contGuide + strings.Repeat(" ", len([]rune(branch))+keyWidth+1)
-	for _, extra := range line.cont {
-		fmt.Fprintf(b, "%s%s%s%s\n", c.dim, contPad, c.reset, extra)
+
+	prefixLen := len(indent) + len([]rune(branch)) + keyWidth + 1
+	avail := maxWidth - prefixLen
+	if avail < 36 {
+		avail = 36
 	}
+
+	chunks := wrapValue(line.value, avail)
+	first := ""
+	if len(chunks) > 0 {
+		first = chunks[0]
+		chunks = chunks[1:]
+	}
+
+	fmt.Fprintf(b, "%s%s%s%s%s%-*s%s %s%s%s\n",
+		c.dim, indent, branch, c.reset,
+		c.dim, keyWidth, key, c.reset,
+		valColor, first, c.reset,
+	)
+	for _, extra := range chunks {
+		fmt.Fprintf(b, "%s%s%s%s%s%s\n", c.dim, contPad, c.reset, valColor, extra, c.reset)
+	}
+	for _, extra := range line.cont {
+		for _, part := range wrapValue(extra, avail) {
+			fmt.Fprintf(b, "%s%s%s%s\n", c.dim, contPad, c.reset, part)
+		}
+	}
+}
+
+// wrapValue splits s into lines of at most width runes, preferring breaks at URL/path separators.
+func wrapValue(s string, width int) []string {
+	if width < 24 || len(s) <= width {
+		if s == "" {
+			return []string{""}
+		}
+		return []string{s}
+	}
+	// Already-ellipsized display strings: re-fit to width instead of wrapping mid-token.
+	if strings.Contains(s, "…") {
+		return []string{truncateMiddle(s, width)}
+	}
+	var out []string
+	for len(s) > width {
+		cut := width
+		if i := lastBreakBefore(s, width); i > 0 {
+			cut = i
+		}
+		out = append(out, s[:cut])
+		s = s[cut:]
+	}
+	if s != "" {
+		out = append(out, s)
+	}
+	return out
+}
+
+func lastBreakBefore(s string, width int) int {
+	n := width
+	if n > len(s) {
+		n = len(s)
+	}
+	// Prefer starting a new line at fragment (#) then query (?).
+	for _, sep := range []byte{'#', '?'} {
+		for i := n - 1; i >= width/4; i-- {
+			if s[i] == sep {
+				return i
+			}
+		}
+	}
+	for i := n - 1; i >= width/2; i-- {
+		switch s[i] {
+		case '/', '&', '=', ',', ' ':
+			return i + 1
+		}
+	}
+	return -1
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 type palette struct {

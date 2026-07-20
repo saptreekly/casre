@@ -147,7 +147,7 @@ func (e *Engine) scanOne(ctx context.Context, t Target) Result {
 		} else if err := waitRate(scanCtx); err != nil {
 			addErr(err)
 		} else {
-			probe := ProbeURL(scanCtx, t.URL, e.cfg.Timeout, e.cfg.InsecureTLS)
+			probe := ProbeURL(scanCtx, t.URL, e.cfg.Timeout, e.cfg.InsecureTLS, t.Fragment)
 			res.URLProbe = &probe
 			if probe.Page != nil {
 				res.Page = probe.Page
@@ -305,10 +305,15 @@ func (e *Engine) scanOne(ctx context.Context, t Target) Result {
 		}
 	}
 
+	if e.cfg.FuzzPaths {
+		addFindings(FuzzInterestingPaths(scanCtx, e.cfg, e.limiter, res))
+	}
+
 	res.Duration = time.Since(start).Round(time.Millisecond).String()
 	res.Findings = AnnotateMitre(res.Findings)
 	res.Mitre = MitreRollup(res.Findings)
 	res.Verdict = BuildVerdict(res)
+	res.Investigation = BuildInvestigation(res)
 	res.IOCs = ExtractIOCs(res)
 	e.scanned.Add(1)
 	if len(res.Errors) > 0 && res.DNS == nil && res.TLS == nil && len(res.Banners) == 0 && res.URLProbe == nil {

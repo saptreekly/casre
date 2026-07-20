@@ -24,13 +24,37 @@ func URLFindings(t Target, probe *HTTPResult) []Finding {
 			Category: "url",
 			Message:  "URL fragment present (not sent to server): #" + truncateMid(t.Fragment, 80),
 		})
+		decoded, decodedOK := DecodeBase64QueryFragment(t.Fragment)
 		if FragmentLooksLikeQuery(t.Fragment) {
 			findings = append(findings, Finding{
 				Severity: "medium",
 				Category: "url",
 				Message:  "fragment looks like a hidden query string — common tracking/campaign pattern",
 			})
-			q := parseFragmentQuery(t.Fragment)
+			// Skip raw parse when the fragment is base64 — keys would be garbage.
+			if !decodedOK {
+				q := parseFragmentQuery(t.Fragment)
+				if len(q) > 0 {
+					keys := make([]string, 0, len(q))
+					for k := range q {
+						keys = append(keys, k)
+					}
+					sort.Strings(keys)
+					findings = append(findings, Finding{
+						Severity: "info",
+						Category: "url",
+						Message:  fmt.Sprintf("fragment params: %s", strings.Join(keys, ", ")),
+					})
+				}
+			}
+		}
+		if decodedOK {
+			findings = append(findings, Finding{
+				Severity: "medium",
+				Category: "url",
+				Message:  "fragment base64-decodes to query: " + truncateMid(decoded, 120),
+			})
+			q := parseFragmentQuery(decoded)
 			if len(q) > 0 {
 				keys := make([]string, 0, len(q))
 				for k := range q {
@@ -40,7 +64,7 @@ func URLFindings(t Target, probe *HTTPResult) []Finding {
 				findings = append(findings, Finding{
 					Severity: "info",
 					Category: "url",
-					Message:  fmt.Sprintf("fragment params: %s", strings.Join(keys, ", ")),
+					Message:  fmt.Sprintf("decoded fragment params: %s", strings.Join(keys, ", ")),
 				})
 			}
 		}

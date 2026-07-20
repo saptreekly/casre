@@ -1,10 +1,12 @@
 package scanner
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/url"
 	"strings"
+	"unicode"
 )
 
 // Target is a host and optional full URL to investigate.
@@ -93,4 +95,70 @@ func FragmentLooksLikeQuery(frag string) bool {
 		return strings.Contains(frag, "=")
 	}
 	return strings.Contains(frag, "=") && strings.Contains(frag, "&")
+}
+
+// DecodeBase64QueryFragment tries to base64-decode a fragment into a query string.
+// Returns the decoded query (e.g. "go=1&s1=2") and true on success.
+func DecodeBase64QueryFragment(frag string) (string, bool) {
+	raw := strings.TrimSpace(frag)
+	raw = strings.TrimPrefix(raw, "?")
+	raw = strings.TrimPrefix(raw, "/")
+	if raw == "" || !looksLikeBase64(raw) {
+		return "", false
+	}
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		decoded, err = base64.RawStdEncoding.DecodeString(raw)
+	}
+	if err != nil {
+		decoded, err = base64.URLEncoding.DecodeString(raw)
+	}
+	if err != nil {
+		decoded, err = base64.RawURLEncoding.DecodeString(raw)
+	}
+	if err != nil || len(decoded) == 0 {
+		return "", false
+	}
+	s := string(decoded)
+	if !isPrintableASCII(s) {
+		return "", false
+	}
+	if !strings.Contains(s, "=") {
+		return "", false
+	}
+	// Prefer query-shaped payloads (key=value).
+	if strings.Contains(s, "&") || strings.Contains(s, "=") {
+		return s, true
+	}
+	return "", false
+}
+
+func looksLikeBase64(s string) bool {
+	if len(s) < 8 {
+		return false
+	}
+	pad := 0
+	for _, r := range s {
+		switch {
+		case r >= 'A' && r <= 'Z', r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '+', r == '/', r == '-', r == '_':
+			continue
+		case r == '=':
+			pad++
+			if pad > 2 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isPrintableASCII(s string) bool {
+	for _, r := range s {
+		if r > unicode.MaxASCII || (r < 0x20 && r != '\t' && r != '\n' && r != '\r') {
+			return false
+		}
+	}
+	return true
 }

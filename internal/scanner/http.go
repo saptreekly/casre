@@ -27,30 +27,31 @@ func AuditHTTP(ctx context.Context, host string, timeout time.Duration, insecure
 
 	for _, scheme := range schemes {
 		url := fmt.Sprintf("%s://%s/", scheme, host)
-		results = append(results, fetchHTTP(ctx, url, host, timeout, insecure, false, true))
+		results = append(results, fetchHTTP(ctx, url, host, timeout, insecure, false, true, ""))
 	}
 	return results
 }
 
 // ProbeURL fetches a URL, follows redirects, and captures a body sample.
-func ProbeURL(ctx context.Context, rawURL string, timeout time.Duration, insecure bool) HTTPResult {
+// fragment is the client-only #... part (not sent on the wire) used for JS redirect reconstruction.
+func ProbeURL(ctx context.Context, rawURL string, timeout time.Duration, insecure bool, fragment string) HTTPResult {
 	host := HostFromURL(rawURL)
 	if host == "" {
 		return HTTPResult{URL: rawURL, Error: "could not parse host from url"}
 	}
-	return fetchHTTP(ctx, rawURL, host, timeout, insecure, true, true)
+	return fetchHTTP(ctx, rawURL, host, timeout, insecure, true, true, fragment)
 }
 
 // ProbeURLHop fetches a single hop without following redirects (for graph mapping).
-func ProbeURLHop(ctx context.Context, rawURL string, timeout time.Duration, insecure bool) HTTPResult {
+func ProbeURLHop(ctx context.Context, rawURL string, timeout time.Duration, insecure bool, fragment string) HTTPResult {
 	host := HostFromURL(rawURL)
 	if host == "" {
 		return HTTPResult{URL: rawURL, Error: "could not parse host from url"}
 	}
-	return fetchHTTP(ctx, rawURL, host, timeout, insecure, true, false)
+	return fetchHTTP(ctx, rawURL, host, timeout, insecure, true, false, fragment)
 }
 
-func fetchHTTP(ctx context.Context, rawURL, host string, timeout time.Duration, insecure bool, captureBody, followRedirects bool) HTTPResult {
+func fetchHTTP(ctx context.Context, rawURL, host string, timeout time.Duration, insecure bool, captureBody, followRedirects bool, fragment string) HTTPResult {
 	result := HTTPResult{
 		URL:     rawURL,
 		Headers: make(map[string]string),
@@ -190,7 +191,7 @@ func fetchHTTP(ctx context.Context, rawURL, host string, timeout time.Duration, 
 	}
 	if captureBody && len(body) > 0 && resp.StatusCode < 300 {
 		ct := resp.Header.Get("Content-Type")
-		result.Page = AnalyzePage(body, ct, firstNonEmpty(result.FinalURL, rawURL))
+		result.Page = AnalyzePage(body, ct, firstNonEmpty(result.FinalURL, rawURL), fragment)
 	}
 
 	return result
