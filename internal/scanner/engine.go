@@ -9,8 +9,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jackweekly/casre/internal/config"
-	"github.com/jackweekly/casre/internal/ratelimit"
+	"github.com/saptreekly/casre/internal/config"
+	"github.com/saptreekly/casre/internal/ratelimit"
 )
 
 // Engine orchestrates concurrent recon across targets.

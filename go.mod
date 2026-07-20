@@ -1,3 +1,3 @@
-module github.com/jackweekly/casre
+module github.com/saptreekly/casre
 
 go 1.26.2

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackweekly/casre/internal/scanner"
+	"github.com/saptreekly/casre/internal/scanner"
 )
 
 // Report is a savable scan snapshot.

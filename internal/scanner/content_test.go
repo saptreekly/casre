@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jackweekly/casre/internal/scanner"
+	"github.com/saptreekly/casre/internal/scanner"
 )
 
 const spoofHTML = `<!DOCTYPE html>

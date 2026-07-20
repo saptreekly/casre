@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackweekly/casre/internal/config"
-	"github.com/jackweekly/casre/internal/ratelimit"
+	"github.com/saptreekly/casre/internal/config"
+	"github.com/saptreekly/casre/internal/ratelimit"
 )
 
 // GraphNode is one URL visited while mapping a phishing chain.

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackweekly/casre/internal/ratelimit"
+	"github.com/saptreekly/casre/internal/ratelimit"
 )
 
 func TestLimiterUnlimited(t *testing.T) {

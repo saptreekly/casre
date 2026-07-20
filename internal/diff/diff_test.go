@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jackweekly/casre/internal/diff"
-	"github.com/jackweekly/casre/internal/scanner"
+	"github.com/saptreekly/casre/internal/diff"
+	"github.com/saptreekly/casre/internal/scanner"
 )
 
 func TestCompareDetectsDNSChange(t *testing.T) {

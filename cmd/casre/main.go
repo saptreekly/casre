@@ -12,10 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackweekly/casre/internal/config"
-	"github.com/jackweekly/casre/internal/diff"
-	"github.com/jackweekly/casre/internal/output"
-	"github.com/jackweekly/casre/internal/scanner"
+	"github.com/saptreekly/casre/internal/config"
+	"github.com/saptreekly/casre/internal/diff"
+	"github.com/saptreekly/casre/internal/output"
+	"github.com/saptreekly/casre/internal/scanner"
 )
 
 func main() {

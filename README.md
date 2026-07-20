@@ -10,10 +10,10 @@ Requires [Go](https://go.dev/dl/) 1.22+.
 
 ```bash
 # Install latest to GOPATH/bin (ensure ~/go/bin is on PATH)
-go install github.com/jackweekly/casre/cmd/casre@latest
+go install github.com/saptreekly/casre/cmd/casre@latest
 
 # Or clone and build locally
-git clone https://github.com/jackweekly/casre.git
+git clone https://github.com/saptreekly/casre.git
 cd casre
 go build -o ~/.local/bin/casre ./cmd/casre
 ```
