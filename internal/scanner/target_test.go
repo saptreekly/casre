@@ -91,4 +91,3 @@ func TestDecodeBase64QueryFragment(t *testing.T) {
 		}
 	})
 }
-

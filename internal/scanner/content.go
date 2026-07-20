@@ -10,8 +10,13 @@ import (
 
 // PageForm is a HTML form found in a response body.
 type PageForm struct {
-	Action string `json:"action,omitempty"`
-	Method string `json:"method,omitempty"`
+	Action       string `json:"action,omitempty"`
+	Method       string `json:"method,omitempty"`
+	ActionHost   string `json:"action_host,omitempty"`
+	CrossOrigin  bool   `json:"cross_origin,omitempty"` // action host ≠ page host
+	HiddenFields int    `json:"hidden_fields,omitempty"`
+	HasPassword  bool   `json:"has_password,omitempty"`
+	AutofillOff  bool   `json:"autofill_off,omitempty"` // autocomplete=off (anti-autofill / harvest)
 }
 
 // PageAnalysis holds phishing-oriented extraction from an HTML body.
@@ -35,8 +40,12 @@ type PageAnalysis struct {
 	CloudStorageHost   bool       `json:"cloud_storage_host,omitempty"`
 	Deepview           string     `json:"deepview,omitempty"` // branch, appsflyer, etc.
 	BrandImpersonation []string   `json:"brand_impersonation,omitempty"`
-	Kits               []string   `json:"kits,omitempty"` // named cloaker / phishing-kit fingerprints
+	Kits               []string   `json:"kits,omitempty"`         // named cloaker / phishing-kit fingerprints
 	Destinations       []string   `json:"destinations,omitempty"` // resolved external next-hops
+	Obfuscation        []string   `json:"obfuscation,omitempty"`  // JS obfuscation signals (confidence, not hops)
+	HiddenUI           []string   `json:"hidden_ui,omitempty"`    // invisible overlays / captcha / login
+	ScriptsSkimmed     []string   `json:"scripts_skimmed,omitempty"`
+	ScriptsSkipped     int        `json:"scripts_skipped,omitempty"` // external scripts not fetched
 }
 
 var (
@@ -61,12 +70,12 @@ var (
 	reValidateProto  = regexp.MustCompile(`(?is)validateProtocol\(\s*["']([^"']+)["']\s*\)`)
 	reQuotedHTTP     = regexp.MustCompile(`(?is)["'](https?://[^"'\s]+)["']`)
 	// 'http://'+srv_ip+'/?'+tracking_param  (and similar protocol+hostVar[+pathLit[+trackVar]])
-	reJSProtoHostVar = regexp.MustCompile(`(?is)(?:window\.)?(?:document\.)?(?:top\.)?(?:self\.)?location(?:\.href)?\s*=\s*["'](https?://)["']\s*\+\s*([A-Za-z_$][\w$]*)\s*(?:\+\s*["']([^"']*)["'])?(?:\+\s*([A-Za-z_$][\w$]*))?`)
-	reJSStringAssign = regexp.MustCompile(`(?is)(?:(?:var|let|const)\s+)?([A-Za-z_$][\w$]*)\s*=\s*["']([^"']+)["']`)
-	reJSHashSplit    = regexp.MustCompile(`(?is)(?:(?:var|let|const)\s+)?([A-Za-z_$][\w$]*)\s*=\s*(?:window\.)?location\.href\.split\(\s*['"]#['"]\s*\)\s*\[\s*1\s*]`)
-	reJSHashDirect   = regexp.MustCompile(`(?is)(?:(?:var|let|const)\s+)?([A-Za-z_$][\w$]*)\s*=\s*(?:window\.)?location\.hash`)
+	reJSProtoHostVar  = regexp.MustCompile(`(?is)(?:window\.)?(?:document\.)?(?:top\.)?(?:self\.)?location(?:\.href)?\s*=\s*["'](https?://)["']\s*\+\s*([A-Za-z_$][\w$]*)\s*(?:\+\s*["']([^"']*)["'])?(?:\+\s*([A-Za-z_$][\w$]*))?`)
+	reJSStringAssign  = regexp.MustCompile(`(?is)(?:(?:var|let|const)\s+)?([A-Za-z_$][\w$]*)\s*=\s*["']([^"']+)["']`)
+	reJSHashSplit     = regexp.MustCompile(`(?is)(?:(?:var|let|const)\s+)?([A-Za-z_$][\w$]*)\s*=\s*(?:window\.)?location\.href\.split\(\s*['"]#['"]\s*\)\s*\[\s*1\s*]`)
+	reJSHashDirect    = regexp.MustCompile(`(?is)(?:(?:var|let|const)\s+)?([A-Za-z_$][\w$]*)\s*=\s*(?:window\.)?location\.hash`)
 	reCheckingBrowser = regexp.MustCompile(`(?i)checking your browser|just a moment|review your connection security|verification complete|ddos protection by`)
-	reDownloadExt    = regexp.MustCompile(`(?i)\.(?:apk|ipa|exe|dmg|pkg|msi|zip|rar|7z|vbs|scr|pdf)(?:\?|#|$)`)
+	reDownloadExt     = regexp.MustCompile(`(?i)\.(?:apk|ipa|exe|dmg|pkg|msi|zip|rar|7z|vbs|scr|pdf)(?:\?|#|$)`)
 )
 
 // AnalyzePage extracts phishing-relevant signals from an HTML (or HTML-ish) body.
@@ -222,23 +231,8 @@ func AnalyzePage(body []byte, contentType, pageURL, fragment string) *PageAnalys
 		}
 	}
 
-	for _, m := range reForm.FindAllStringSubmatch(text, 10) {
-		attrs := ""
-		if len(m) > 1 {
-			attrs = m[1]
-		}
-		f := PageForm{Method: "get"}
-		if am := reAction.FindStringSubmatch(attrs); len(am) > 1 {
-			f.Action = absolutize(pageURL, am[1])
-		}
-		if mm := reMethod.FindStringSubmatch(attrs); len(mm) > 1 {
-			f.Method = strings.ToLower(mm[1])
-		}
-		p.Forms = append(p.Forms, f)
-	}
-
-	p.HasPasswordField = rePassword.MatchString(text)
 	p.HasTurnstile = reTurnstile.MatchString(text)
+	applyHTMLSignals(p, text, pageURL)
 
 	p.BrandImpersonation = detectBrandImpersonation(text, baseHost, p)
 	p.Kits = detectKits(text, p)
@@ -595,14 +589,64 @@ func PageFindings(pageURL string, page *PageAnalysis) []Finding {
 		})
 	}
 	for _, f := range page.Forms {
-		actionHost := HostFromURL(f.Action)
-		if actionHost != "" && !HostEqual(actionHost, host) {
+		if f.CrossOrigin || (f.ActionHost != "" && !HostEqual(f.ActionHost, host)) {
+			msg := fmt.Sprintf("form posts off-site (%s → %s)", f.Method, f.Action)
+			if f.HasPassword {
+				msg += " · password field"
+			}
+			if f.HiddenFields > 0 {
+				msg += fmt.Sprintf(" · %d hidden field(s)", f.HiddenFields)
+			}
+			if f.AutofillOff {
+				msg += " · autocomplete=off"
+			}
 			findings = append(findings, Finding{
 				Severity: "high",
 				Category: "phish",
-				Message:  fmt.Sprintf("form posts off-site (%s → %s)", f.Method, f.Action),
+				Message:  msg,
+			})
+			continue
+		}
+		if f.HasPassword && f.HiddenFields >= 2 {
+			findings = append(findings, Finding{
+				Severity: "medium",
+				Category: "phish",
+				Message:  fmt.Sprintf("credential form with %d hidden field(s) (possible tracking/exfil tokens)", f.HiddenFields),
 			})
 		}
+		if f.HasPassword && f.AutofillOff {
+			findings = append(findings, Finding{
+				Severity: "medium",
+				Category: "phish",
+				Message:  "password form disables autocomplete (common on credential harvesters)",
+			})
+		}
+	}
+
+	for _, sig := range page.Obfuscation {
+		findings = append(findings, Finding{
+			Severity: "medium",
+			Category: "phish",
+			Message:  "JS obfuscation: " + sig,
+		})
+	}
+	for _, sig := range page.HiddenUI {
+		sev := "medium"
+		if strings.Contains(sig, "password") || strings.Contains(sig, "full-page") {
+			sev = "high"
+		}
+		findings = append(findings, Finding{
+			Severity: sev,
+			Category: "phish",
+			Message:  "hidden UI: " + sig,
+		})
+	}
+	if len(page.ScriptsSkimmed) > 0 {
+		findings = append(findings, Finding{
+			Severity: "info",
+			Category: "phish",
+			Message:  fmt.Sprintf("skimmed %d external script(s) for redirects/obfuscation", len(page.ScriptsSkimmed)),
+		})
 	}
 
 	for _, img := range page.ExternalImages {

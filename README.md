@@ -38,7 +38,7 @@ casre 'https://storage.googleapis.com/bucket/lure.html#?…'
 
 | Key | Tab | Contents |
 |-----|-----|----------|
-| `1` | **Story** | Verdict narrative, confidence, kill-chain timeline, blast radius, attribution, coverage gaps, technique mix |
+| `1` | **Story** | Verdict, confidence, kill-chain timeline, blast radius, attribution, coverage gaps, page facts (obfuscation, form exfil, scripts) |
 | `2` | **Chain** | Redirect hop graph with status, via, and role |
 | `3` | **Alerts** | Findings by severity (high/medium first; `i` toggles info) |
 | `4` | **Indicators** | Domains, IPs, URLs, ASNs |
@@ -65,20 +65,32 @@ Set under **options** (`o`):
 
 | Profile | Behavior |
 |---------|----------|
-| **Quick** | Shallow campaign crawl, no path fuzz |
-| **Deep** | Longer chains + path fuzz on cloaker/lander hosts |
-| **Wide** | More pages, campaign mode off, path fuzz on |
+| **Quick** | Shallow campaign crawl + lite path fuzz (core paths, soft-404 aware) |
+| **Deep** | Longer chains + fuller path fuzz on more hosts |
+| **Wide** | More pages, campaign mode off, fuller path fuzz |
 | **Custom** | Manual depth / max pages / toggles |
 
-**Campaign mode** prefers ESP → cloaker → lander style chains and stops expanding brand/CDN/social decoys. **Path fuzzing** probes common kit/admin paths on lander hosts after the crawl.
+**Campaign mode** prefers ESP → cloaker → lander style chains and stops expanding brand/CDN/social decoys.
 
-## What it looks for
+**Path fuzzing** is on by default (toggle in options). It uses:
+
+- Lite GETs (no redirect follow, no HTML parse)
+- Soft-404 canary baselines to ignore catch-all pages
+- Skip of already-crawled URLs and cloud-storage hosts
+- Core admin/kit paths first, with adaptive expand after hits
+- Short timeouts and early abort on dead hosts
+
+## Page & script analysis
 
 - Redirect / cloaker patterns (`location` assigns, concat deobfuscation, `atob`, kit fingerprints)
+- Capped external `<script src>` skim for redirects and obfuscation (Quick 2 · default 3 · Deep/Wide 5)
+- JS obfuscation signals (`eval` / `Function` / `fromCharCode` / packed loaders) — confidence and alerts, not hop spam
+- Form exfil detail (cross-origin action, hidden fields, `autocomplete=off`)
+- Hidden UI / overlays (full-page iframes, hidden captcha, visibility-hidden login)
 - Brand impersonation (Microsoft 365, Apple, Google, DocuSign, PayPal, Okta, banks, shipping, and others)
 - Cloudflare Turnstile and cloud-storage hosting signals
-- DNS, TLS, banners, HTTP, ASN/CDN enrichment
-- MITRE ATT&CK tags on findings where mapped
+
+Also collects DNS, TLS, banners, HTTP, ASN/CDN enrichment, and MITRE ATT&CK tags on findings where mapped.
 
 ## Authorization
 

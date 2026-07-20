@@ -6,29 +6,29 @@ import (
 
 // Result aggregates all findings for one target.
 type Result struct {
-	Host      string       `json:"host"`
-	InputURL  string       `json:"input_url,omitempty"`  // wire URL probed
-	RawInput  string       `json:"raw_input,omitempty"`  // original analyst paste
-	Fragment  string       `json:"fragment,omitempty"`   // #... client-only part
-	ScannedAt time.Time    `json:"scanned_at"`
-	URLProbe  *HTTPResult   `json:"url_probe,omitempty"`
-	Page      *PageAnalysis `json:"page,omitempty"`
-	Graph     *AttackGraph  `json:"graph,omitempty"`
-	Hops      []HopDetail   `json:"hops,omitempty"`
-	FinalHost string        `json:"final_host,omitempty"` // redirects / JS destinations leave InputURL host
-	DNS       *DNSResult   `json:"dns,omitempty"`
-	TLS       *TLSResult   `json:"tls,omitempty"`
-	Banners   []Banner     `json:"banners,omitempty"`
-	HTTP      []HTTPResult `json:"http,omitempty"`
-	Enrich    *Enrichment  `json:"enrichment,omitempty"`
-	Findings  []Finding    `json:"findings,omitempty"`
-	Mitre     []MitreHit   `json:"mitre,omitempty"`
+	Host          string         `json:"host"`
+	InputURL      string         `json:"input_url,omitempty"` // wire URL probed
+	RawInput      string         `json:"raw_input,omitempty"` // original analyst paste
+	Fragment      string         `json:"fragment,omitempty"`  // #... client-only part
+	ScannedAt     time.Time      `json:"scanned_at"`
+	URLProbe      *HTTPResult    `json:"url_probe,omitempty"`
+	Page          *PageAnalysis  `json:"page,omitempty"`
+	Graph         *AttackGraph   `json:"graph,omitempty"`
+	Hops          []HopDetail    `json:"hops,omitempty"`
+	FinalHost     string         `json:"final_host,omitempty"` // redirects / JS destinations leave InputURL host
+	DNS           *DNSResult     `json:"dns,omitempty"`
+	TLS           *TLSResult     `json:"tls,omitempty"`
+	Banners       []Banner       `json:"banners,omitempty"`
+	HTTP          []HTTPResult   `json:"http,omitempty"`
+	Enrich        *Enrichment    `json:"enrichment,omitempty"`
+	Findings      []Finding      `json:"findings,omitempty"`
+	Mitre         []MitreHit     `json:"mitre,omitempty"`
 	Verdict       *Verdict       `json:"verdict,omitempty"`
 	Investigation *Investigation `json:"investigation,omitempty"`
 	IOCs          *IOCSet        `json:"iocs,omitempty"`
-	Evidence  []Evidence   `json:"evidence,omitempty"`
-	Errors    []string     `json:"errors,omitempty"`
-	Duration  string       `json:"duration"`
+	Evidence      []Evidence     `json:"evidence,omitempty"`
+	Errors        []string       `json:"errors,omitempty"`
+	Duration      string         `json:"duration"`
 }
 
 // Finding is an actionable OSINT / security observation.

@@ -10,12 +10,12 @@ import (
 // brandSig is a lure/impersonation fingerprint.
 // Matching any Needle (or all RequireAll) on a non-excluded host triggers BrandImpersonation.
 type brandSig struct {
-	Name            string
-	HostExclude     []string // skip if host contains any of these
-	SkipCloudStorage bool    // skip on GCS/S3/etc (avoids Google false positives)
-	Needles         []string // case-insensitive; any match
-	RequireAll      []string // if set, all must appear (in addition to any Needles if both set — Needles OR RequireAll logic: if RequireAll nonempty, use RequireAll only)
-	AssetNeedles    []string // match against external image URLs
+	Name             string
+	HostExclude      []string // skip if host contains any of these
+	SkipCloudStorage bool     // skip on GCS/S3/etc (avoids Google false positives)
+	Needles          []string // case-insensitive; any match
+	RequireAll       []string // if set, all must appear (in addition to any Needles if both set — Needles OR RequireAll logic: if RequireAll nonempty, use RequireAll only)
+	AssetNeedles     []string // match against external image URLs
 }
 
 var brandSignatures = []brandSig{
@@ -92,7 +92,7 @@ var brandSignatures = []brandSig{
 		AssetNeedles: []string{"fedex", "ups", "usps", "dhl"},
 	},
 	{
-		Name:        "Bank / financial lure",
+		Name: "Bank / financial lure",
 		HostExclude: []string{
 			"chase.com", "bankofamerica.com", "wellsfargo.com", "citibank.com",
 			"capitalone.com", "americanexpress.com", "amex.com",
@@ -124,12 +124,12 @@ var brandSignatures = []brandSig{
 }
 
 var (
-	reKitHREFB = regexp.MustCompile(`(?is)srv_ip|tarcking_param|tracking_param`)
-	reKitAtob  = regexp.MustCompile(`(?is)(?:location(?:\.href)?|location\.(?:replace|assign))\s*(?:=\s*|\()\s*atob\s*\(`)
+	reKitHREFB    = regexp.MustCompile(`(?is)srv_ip|tarcking_param|tracking_param`)
+	reKitAtob     = regexp.MustCompile(`(?is)(?:location(?:\.href)?|location\.(?:replace|assign))\s*(?:=\s*|\()\s*atob\s*\(`)
 	reKitFromChar = regexp.MustCompile(`(?is)String\.fromCharCode\s*\(\s*\d`)
 	reAtobLiteral = regexp.MustCompile(`(?is)(?:window\.)?(?:document\.)?(?:top\.)?(?:self\.)?location(?:\.href)?\s*=\s*atob\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)|` +
 		`(?:window\.)?(?:document\.)?(?:top\.)?(?:self\.)?location\.(?:replace|assign)\(\s*atob\(\s*["']([A-Za-z0-9+/=]+)["']\s*\)`)
-	reJSAssignFn = regexp.MustCompile(`(?is)(?:window\.)?(?:document\.)?(?:top\.)?(?:self\.)?location\.assign\(\s*["']([^"']+)["']`)
+	reJSAssignFn   = regexp.MustCompile(`(?is)(?:window\.)?(?:document\.)?(?:top\.)?(?:self\.)?location\.assign\(\s*["']([^"']+)["']`)
 	reJSConcatPair = regexp.MustCompile(`(?is)["']([^"']*)["']\s*\+\s*["']([^"']*)["']`)
 )
 

@@ -32,8 +32,8 @@ func TestBuildInvestigationTimelineAndTechniques(t *testing.T) {
 			{Severity: "high", Category: "phish", Message: "password input field present on page"},
 			{Severity: "high", Category: "phish", Message: "JS/meta redirect to external host: http://evil.lander/"},
 		},
-		DNS:    &DNSResult{A: []string{"1.2.3.4"}},
-		Enrich: &Enrichment{ASN: []ASNInfo{{IP: "1.2.3.4", ASN: "123", ASName: "TEST-AS"}}, CDN: []string{"gcp"}},
+		DNS:     &DNSResult{A: []string{"1.2.3.4"}},
+		Enrich:  &Enrichment{ASN: []ASNInfo{{IP: "1.2.3.4", ASN: "123", ASName: "TEST-AS"}}, CDN: []string{"gcp"}},
 		Verdict: &Verdict{Score: 80, Label: "malicious", Narrative: "tracker → cloaker → lander"},
 	}
 	inv := BuildInvestigation(r)
@@ -70,6 +70,7 @@ func TestBuildCoverageGapsFlagsExternalScripts(t *testing.T) {
 		Page: &PageAnalysis{
 			Bytes:           100,
 			ExternalScripts: []string{"https://cdn.example/a.js", "https://cdn.example/b.js"},
+			ScriptsSkipped:  2,
 		},
 		Graph: &AttackGraph{Nodes: []GraphNode{
 			{Host: "evil.test", Role: RoleCloaker},
@@ -82,11 +83,28 @@ func TestBuildCoverageGapsFlagsExternalScripts(t *testing.T) {
 		if strings.Contains(g.Gap, "external script") {
 			foundScript = true
 		}
-		if strings.Contains(g.Gap, "Path fuzzing not run") {
+		if strings.Contains(g.Gap, "Path fuzzing") {
 			foundFuzz = true
 		}
 	}
 	if !foundScript || !foundFuzz {
 		t.Fatalf("gaps=%+v", gaps)
+	}
+}
+
+func TestBuildCoverageGapsSkipsWhenScriptsSkimmed(t *testing.T) {
+	r := Result{
+		Host: "evil.test",
+		Page: &PageAnalysis{
+			Bytes:           100,
+			ExternalScripts: []string{"https://cdn.example/a.js"},
+			ScriptsSkimmed:  []string{"https://cdn.example/a.js"},
+			ScriptsSkipped:  0,
+		},
+	}
+	for _, g := range buildCoverageGaps(r) {
+		if strings.Contains(g.Gap, "external script") {
+			t.Fatalf("unexpected script gap: %+v", g)
+		}
 	}
 }

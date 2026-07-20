@@ -11,12 +11,12 @@ import (
 
 // Evidence is a saved HTML snapshot of a cloaker/lander page.
 type Evidence struct {
-	Role      string `json:"role"`
-	URL       string `json:"url"`
-	Host      string `json:"host"`
-	Title     string `json:"title,omitempty"`
-	Path      string `json:"path"`
-	Bytes     int    `json:"bytes"`
+	Role        string `json:"role"`
+	URL         string `json:"url"`
+	Host        string `json:"host"`
+	Title       string `json:"title,omitempty"`
+	Path        string `json:"path"`
+	Bytes       int    `json:"bytes"`
 	ContentType string `json:"content_type,omitempty"`
 }
 

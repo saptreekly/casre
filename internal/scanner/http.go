@@ -51,6 +51,82 @@ func ProbeURLHop(ctx context.Context, rawURL string, timeout time.Duration, inse
 	return fetchHTTP(ctx, rawURL, host, timeout, insecure, true, false, fragment)
 }
 
+// ProbeURLLite is a fast single-request GET for path fuzzing: no redirect follow,
+// no page analysis, optional small body sample for soft-404 fingerprinting.
+func ProbeURLLite(ctx context.Context, rawURL string, timeout time.Duration, insecure bool, sampleBytes int64) HTTPResult {
+	host := HostFromURL(rawURL)
+	if host == "" {
+		return HTTPResult{URL: rawURL, Error: "could not parse host from url"}
+	}
+	if sampleBytes <= 0 {
+		sampleBytes = 2048
+	}
+	result := HTTPResult{
+		URL:     rawURL,
+		Headers: make(map[string]string),
+	}
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   timeout,
+			KeepAlive: timeout,
+		}).DialContext,
+		TLSHandshakeTimeout: timeout,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: insecure, //nolint:gosec
+			MinVersion:         tls.VersionTLS10,
+		},
+		ForceAttemptHTTP2: true,
+		MaxIdleConns:      8,
+		IdleConnTimeout:   timeout,
+		DisableKeepAlives: false,
+	}
+	client := &http.Client{
+		Transport: transport,
+		Timeout:   timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; CASRE/1.0; +recon; authorized-use-only)")
+	req.Header.Set("Accept", "*/*")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		result.Error = err.Error()
+		return result
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, sampleBytes))
+	_, _ = io.Copy(io.Discard, resp.Body)
+
+	result.StatusCode = resp.StatusCode
+	result.Server = resp.Header.Get("Server")
+	result.ContentLength = resp.ContentLength
+	if result.ContentLength < 0 {
+		result.ContentLength = int64(len(body))
+	}
+	result.Body = body
+	result.FinalURL = rawURL
+	result.FinalHost = host
+	if loc := resp.Header.Get("Location"); loc != "" && resp.StatusCode >= 300 && resp.StatusCode < 400 {
+		if abs := absolutize(rawURL, loc); abs != "" {
+			result.FinalURL = abs
+			result.FinalHost = HostFromURL(abs)
+		}
+	}
+	for k, vals := range resp.Header {
+		result.Headers[k] = strings.Join(vals, ", ")
+	}
+	return result
+}
+
 func fetchHTTP(ctx context.Context, rawURL, host string, timeout time.Duration, insecure bool, captureBody, followRedirects bool, fragment string) HTTPResult {
 	result := HTTPResult{
 		URL:     rawURL,

@@ -130,9 +130,9 @@ func DNSFindings(host string, dns *DNSResult) []Finding {
 	}
 
 	var (
-		hasSPF       bool
-		hasDMARC     bool
-		verifyCount  int
+		hasSPF        bool
+		hasDMARC      bool
+		verifyCount   int
 		verifyVendors []string
 	)
 	seenVendor := map[string]struct{}{}

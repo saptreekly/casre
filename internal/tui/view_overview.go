@@ -166,6 +166,31 @@ func (m model) storyItems() []storyItem {
 	if r.Page != nil && len(r.Page.Kits) > 0 {
 		add("Facts", "kit", strings.Join(r.Page.Kits, " · "), "")
 	}
+	if r.Page != nil && len(r.Page.Obfuscation) > 0 {
+		add("Facts", "obfuscation", strings.Join(r.Page.Obfuscation, " · "), "")
+	}
+	if r.Page != nil && len(r.Page.HiddenUI) > 0 {
+		add("Facts", "hidden UI", strings.Join(r.Page.HiddenUI, " · "), "")
+	}
+	if r.Page != nil {
+		for _, f := range r.Page.Forms {
+			if !f.CrossOrigin {
+				continue
+			}
+			detail := f.Method + " → " + f.Action
+			if f.HiddenFields > 0 {
+				detail += fmt.Sprintf(" · %d hidden", f.HiddenFields)
+			}
+			if f.AutofillOff {
+				detail += " · autocomplete=off"
+			}
+			add("Facts", "form exfil", detail, "")
+			break
+		}
+	}
+	if r.Page != nil && len(r.Page.ScriptsSkimmed) > 0 {
+		add("Facts", "scripts", fmt.Sprintf("skimmed %d · skipped %d", len(r.Page.ScriptsSkimmed), r.Page.ScriptsSkipped), "")
+	}
 	if r.Page != nil && len(r.Page.JSRedirects) > 0 {
 		add("Facts", "js", r.Page.JSRedirects[0], "")
 	}

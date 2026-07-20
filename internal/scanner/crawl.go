@@ -184,6 +184,11 @@ func CrawlFollow(
 				host := HostFromURL(item.wire)
 				page := probe.Page
 
+				if page != nil && item.expand {
+					EnrichPageFromScripts(ctx, page, item.wire, frag, cfg.Timeout, cfg.InsecureTLS, scriptFetchCap(cfg), wait)
+					probe.Page = page
+				}
+
 				var hopFindings []Finding
 				if item.depth == 0 {
 					hopFindings = append(hopFindings, URLFindings(seed, &probe)...)
@@ -419,6 +424,13 @@ func CrawlFollow(
 	})
 
 	return &AttackGraph{Nodes: nodes, Edges: edges}, hops, dedupeFindings(findings), evidence
+}
+
+func scriptFetchCap(cfg config.Config) int {
+	if cfg.ScriptFetchMax > 0 {
+		return cfg.ScriptFetchMax
+	}
+	return 3
 }
 
 func lightHopEnrich(

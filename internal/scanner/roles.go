@@ -82,6 +82,14 @@ func isCloakerPage(page *PageAnalysis) bool {
 	if len(page.JSRedirects) > 0 && (page.CloudStorageHost || len(page.MetaRefresh) > 0) {
 		return true
 	}
+	for _, h := range page.HiddenUI {
+		if strings.Contains(h, "iframe") || strings.Contains(h, "captcha") || strings.Contains(h, "Turnstile") {
+			return true
+		}
+	}
+	if len(page.Obfuscation) >= 2 && len(page.JSRedirects) > 0 {
+		return true
+	}
 	return false
 }
 
@@ -93,11 +101,19 @@ func isStrongLander(page *PageAnalysis, pageHost, pathStr string) bool {
 		return true
 	}
 	for _, f := range page.Forms {
+		if f.CrossOrigin {
+			return true
+		}
 		if f.Action == "" {
 			continue
 		}
 		ah := HostFromURL(f.Action)
 		if ah != "" && !HostEqual(ah, pageHost) {
+			return true
+		}
+	}
+	for _, h := range page.HiddenUI {
+		if strings.Contains(h, "password") || strings.Contains(h, "login") || strings.Contains(h, "harvest") {
 			return true
 		}
 	}

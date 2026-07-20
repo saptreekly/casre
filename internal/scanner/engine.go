@@ -150,6 +150,9 @@ func (e *Engine) scanOne(ctx context.Context, t Target) Result {
 			probe := ProbeURL(scanCtx, t.URL, e.cfg.Timeout, e.cfg.InsecureTLS, t.Fragment)
 			res.URLProbe = &probe
 			if probe.Page != nil {
+				waitScripts := func() error { return waitRate(scanCtx) }
+				EnrichPageFromScripts(scanCtx, probe.Page, firstNonEmpty(probe.FinalURL, t.URL), t.Fragment,
+					e.cfg.Timeout, e.cfg.InsecureTLS, scriptFetchCap(e.cfg), waitScripts)
 				res.Page = probe.Page
 				addFindings(PageFindings(probe.FinalURL, probe.Page))
 				for _, dest := range probe.Page.Destinations {

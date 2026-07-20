@@ -83,7 +83,7 @@ func (m setupModel) applyConfig() config.Config {
 		cfg.CrawlPreset = config.DetectCrawlPreset(cfg)
 	}
 	if cfg.FuzzMaxHosts <= 0 {
-		cfg.FuzzMaxHosts = 3
+		cfg.FuzzMaxHosts = 2
 	}
 	return cfg
 }
@@ -388,11 +388,11 @@ func presetLabel(p string) string {
 func presetBlurb(p string) string {
 	switch p {
 	case config.PresetQuick:
-		return "Quick: 3 hops · 12 pages · campaign on · fuzz off"
+		return "Quick: 3 hops · 12 pages · campaign on · lite fuzz"
 	case config.PresetDeep:
-		return "Deep: 12 hops · 60 pages · campaign on · fuzz on"
+		return "Deep: 12 hops · 60 pages · campaign on · full fuzz"
 	case config.PresetWide:
-		return "Wide: 6 hops · 100 pages · campaign off · fuzz on"
+		return "Wide: 6 hops · 100 pages · campaign off · full fuzz"
 	default:
 		return "Custom: manual depth / pages / fuzz"
 	}

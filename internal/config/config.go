@@ -49,6 +49,9 @@ type Config struct {
 	FuzzPaths bool
 	// FuzzMaxHosts caps how many hosts path-fuzzing will hit (0 = default 3).
 	FuzzMaxHosts int
+
+	// ScriptFetchMax caps external <script src> fetches to skim for redirects (0 = default 3).
+	ScriptFetchMax int
 }
 
 // Modules toggles scanner capabilities.
@@ -63,10 +66,10 @@ type Modules struct {
 // Default returns a sensible configuration for recon scans.
 func Default() Config {
 	cfg := Config{
-		Concurrency:  100,
-		RateLimit:    50,
-		Timeout:      3 * time.Second,
-		Ports:        []int{80, 443, 22},
+		Concurrency: 100,
+		RateLimit:   50,
+		Timeout:     3 * time.Second,
+		Ports:       []int{80, 443, 22},
 		Modules: Modules{
 			DNS:    true,
 			TLS:    true,
@@ -74,15 +77,16 @@ func Default() Config {
 			HTTP:   true,
 			Enrich: true,
 		},
-		Follow:       true,
-		Depth:        5,
-		MaxURLs:      25,
-		Campaign:     true,
-		CrawlPreset:  PresetCustom,
-		CrawlBudget:  0,
-		HopWorkers:   8,
-		FuzzPaths:    false,
-		FuzzMaxHosts: 3,
+		Follow:         true,
+		Depth:          5,
+		MaxURLs:        25,
+		Campaign:       true,
+		CrawlPreset:    PresetCustom,
+		CrawlBudget:    0,
+		HopWorkers:     8,
+		FuzzPaths:      true,
+		FuzzMaxHosts:   2,
+		ScriptFetchMax: 3,
 	}
 	return cfg
 }
@@ -95,7 +99,9 @@ func ApplyCrawlPreset(cfg *Config, preset string) {
 		cfg.Depth = 3
 		cfg.MaxURLs = 12
 		cfg.Campaign = true
-		cfg.FuzzPaths = false
+		cfg.FuzzPaths = true
+		cfg.FuzzMaxHosts = 2
+		cfg.ScriptFetchMax = 2
 		cfg.CrawlPreset = PresetQuick
 	case PresetDeep:
 		cfg.Follow = true
@@ -103,6 +109,8 @@ func ApplyCrawlPreset(cfg *Config, preset string) {
 		cfg.MaxURLs = 60
 		cfg.Campaign = true
 		cfg.FuzzPaths = true
+		cfg.FuzzMaxHosts = 3
+		cfg.ScriptFetchMax = 5
 		cfg.CrawlPreset = PresetDeep
 	case PresetWide:
 		cfg.Follow = true
@@ -110,6 +118,8 @@ func ApplyCrawlPreset(cfg *Config, preset string) {
 		cfg.MaxURLs = 100
 		cfg.Campaign = false
 		cfg.FuzzPaths = true
+		cfg.FuzzMaxHosts = 4
+		cfg.ScriptFetchMax = 5
 		cfg.CrawlPreset = PresetWide
 	default:
 		cfg.CrawlPreset = PresetCustom

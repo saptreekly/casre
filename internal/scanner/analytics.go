@@ -8,18 +8,18 @@ import (
 
 // Investigation holds analyst-facing analytics derived from a scan result.
 type Investigation struct {
-	KillChain     string          `json:"kill_chain,omitempty"`
-	Timeline      []TimelinePhase `json:"timeline,omitempty"`
-	Confidence    ConfidenceBand  `json:"confidence"`
-	BlastRadius   BlastRadius     `json:"blast_radius"`
-	Attributions  []Attribution   `json:"attributions,omitempty"`
-	Gaps          []CoverageGap   `json:"gaps,omitempty"`
-	Techniques    TechniqueMix    `json:"techniques"`
+	KillChain    string          `json:"kill_chain,omitempty"`
+	Timeline     []TimelinePhase `json:"timeline,omitempty"`
+	Confidence   ConfidenceBand  `json:"confidence"`
+	BlastRadius  BlastRadius     `json:"blast_radius"`
+	Attributions []Attribution   `json:"attributions,omitempty"`
+	Gaps         []CoverageGap   `json:"gaps,omitempty"`
+	Techniques   TechniqueMix    `json:"techniques"`
 }
 
 // TimelinePhase is one step in the attack-chain / kill-chain view.
 type TimelinePhase struct {
-	Phase  string `json:"phase"`            // delivery, cloaker, relay, lander, harvest, payload
+	Phase  string `json:"phase"` // delivery, cloaker, relay, lander, harvest, payload
 	Host   string `json:"host,omitempty"`
 	Detail string `json:"detail,omitempty"`
 	Via    string `json:"via,omitempty"`
@@ -484,6 +484,24 @@ func buildAttributions(r Result) []Attribution {
 		if len(r.Page.MetaRefresh) > 0 {
 			add("Meta refresh", r.Page.MetaRefresh[0], "page")
 		}
+		for _, o := range r.Page.Obfuscation {
+			add("Obfuscation: "+o, "page/script body on "+r.Host, "page")
+		}
+		for _, h := range r.Page.HiddenUI {
+			add("Hidden UI: "+h, "page DOM on "+r.Host, "page")
+		}
+		for _, f := range r.Page.Forms {
+			if f.CrossOrigin {
+				src := f.Action
+				if f.HiddenFields > 0 {
+					src += fmt.Sprintf(" (%d hidden)", f.HiddenFields)
+				}
+				add("Off-site form exfil", src, "page")
+			}
+		}
+		if len(r.Page.ScriptsSkimmed) > 0 {
+			add("External script skim", strings.Join(r.Page.ScriptsSkimmed, " · "), "page")
+		}
 	}
 
 	if r.Graph != nil {
@@ -557,15 +575,23 @@ func buildCoverageGaps(r Result) []CoverageGap {
 	}
 
 	extScripts := 0
+	skimmed := 0
+	skipped := 0
 	if r.Page != nil {
 		extScripts += len(r.Page.ExternalScripts)
+		skimmed += len(r.Page.ScriptsSkimmed)
+		skipped += r.Page.ScriptsSkipped
 	}
 	for _, h := range r.Hops {
 		if h.Page != nil {
 			extScripts += len(h.Page.ExternalScripts)
+			skimmed += len(h.Page.ScriptsSkimmed)
+			skipped += h.Page.ScriptsSkipped
 		}
 	}
-	if extScripts > 0 {
+	if skipped > 0 {
+		add(fmt.Sprintf("%d external script(s) not fetched (skimmed %d)", skipped, skimmed), "medium")
+	} else if extScripts > 0 && skimmed == 0 {
 		add(fmt.Sprintf("%d external script(s) referenced but not fetched", extScripts), "medium")
 	}
 
@@ -600,7 +626,8 @@ func buildCoverageGaps(r Result) []CoverageGap {
 		}
 	}
 	if hasInteresting && !fuzzEnabled {
-		add("Path fuzzing not run (enable Deep/Wide or Path fuzzing in options)", "medium")
+		// Fuzz is on by default; empty results usually mean soft-404 catch-all or no paths.
+		add("Path fuzzing found no interesting paths on cloaker/lander hosts", "low")
 	}
 
 	if r.Fragment != "" && r.Page != nil && len(r.Page.JSRedirects) == 0 {
@@ -657,6 +684,33 @@ func buildConfidence(r Result, inv *Investigation) ConfidenceBand {
 	}
 	if r.Page != nil && (len(r.Page.BrandImpersonation) > 0 || len(r.Page.Kits) > 0) {
 		addReason(10, "kit/brand fingerprint matched")
+	}
+	obf, hidden := 0, 0
+	crossForm := false
+	pages := []*PageAnalysis{r.Page}
+	for _, h := range r.Hops {
+		pages = append(pages, h.Page)
+	}
+	for _, p := range pages {
+		if p == nil {
+			continue
+		}
+		obf += len(p.Obfuscation)
+		hidden += len(p.HiddenUI)
+		for _, f := range p.Forms {
+			if f.CrossOrigin && f.HasPassword {
+				crossForm = true
+			}
+		}
+	}
+	if crossForm {
+		addReason(8, "cross-origin credential form")
+	}
+	if obf > 0 {
+		addReason(6, "JS obfuscation signals present")
+	}
+	if hidden > 0 {
+		addReason(6, "hidden UI / overlay tricks")
 	}
 	if inv != nil && len(inv.Timeline) >= 3 {
 		addReason(8, "kill-chain has 3+ phases")
