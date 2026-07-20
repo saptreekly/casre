@@ -1,0 +1,17 @@
+# Binaries
+/casre
+*.exe
+
+# Go
+/vendor/
+
+# OS / editor
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# Local scan outputs
+*.json
+!**/testdata/**/*.json
