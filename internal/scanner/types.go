@@ -22,15 +22,17 @@ type Result struct {
 	HTTP      []HTTPResult `json:"http,omitempty"`
 	Enrich    *Enrichment  `json:"enrichment,omitempty"`
 	Findings  []Finding    `json:"findings,omitempty"`
+	Mitre     []MitreHit   `json:"mitre,omitempty"`
 	Errors    []string     `json:"errors,omitempty"`
 	Duration  string       `json:"duration"`
 }
 
 // Finding is an actionable OSINT / security observation.
 type Finding struct {
-	Severity string `json:"severity"` // info, low, medium, high
-	Category string `json:"category"`
-	Message  string `json:"message"`
+	Severity string     `json:"severity"` // info, low, medium, high
+	Category string     `json:"category"`
+	Message  string     `json:"message"`
+	Mitre    []MitreRef `json:"mitre,omitempty"`
 }
 
 // DNSResult holds resolved DNS records.

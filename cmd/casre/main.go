@@ -54,7 +54,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, `CASRE — Concurrent Attack Surface Recon Engine
 
 High-speed Go scanner for external infrastructure mapping and phishing URL chains:
-  DNS · TLS · banners · HTTP · CDN/ASN · page analysis · auto hop graph
+  DNS · TLS · banners · HTTP · CDN/ASN · page analysis · hop graph · MITRE ATT&CK tags
 
 Usage:
   casre [flags] host1 [host2 ...]

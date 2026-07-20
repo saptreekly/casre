@@ -550,15 +550,51 @@ func collectSections(r scanner.Result, verbose bool) []section {
 				sev:   sev,
 			})
 			for _, f := range items {
+				msg := f.Message
+				if tags := scanner.FormatMitreIDs(f.Mitre); tags != "" {
+					msg = msg + "  [" + tags + "]"
+				}
 				lines = append(lines, treeLine{
 					key:   f.Category,
-					value: f.Message,
+					value: msg,
 					sev:   sev,
 					child: true,
 				})
 			}
 		}
 		out = append(out, section{title: "FINDINGS", lines: lines})
+	}
+
+	if len(r.Mitre) > 0 {
+		var lines []treeLine
+		for _, m := range r.Mitre {
+			// Skip low-confidence technique rollups unless verbose.
+			if m.Confidence == "low" && !verbose {
+				continue
+			}
+			val := fmt.Sprintf("%s · %s", m.Name, m.Tactic)
+			if m.Count > 0 {
+				val += fmt.Sprintf(" · ×%d", m.Count)
+			}
+			if m.Confidence != "" {
+				val += " · " + m.Confidence
+			}
+			lines = append(lines, treeLine{
+				key:   m.ID,
+				value: val,
+				sev:   mitreConfSeverity(m.Confidence),
+			})
+		}
+		if skipped := countLowMitre(r.Mitre); skipped > 0 && !verbose {
+			lines = append(lines, treeLine{
+				key:   "low",
+				value: fmt.Sprintf("%d technique(s) hidden (use -v)", skipped),
+				sev:   "info",
+			})
+		}
+		if len(lines) > 0 {
+			out = append(out, section{title: "MITRE", lines: lines})
+		}
 	}
 
 	if len(r.Errors) > 0 {
@@ -570,6 +606,27 @@ func collectSections(r scanner.Result, verbose bool) []section {
 	}
 
 	return out
+}
+
+func mitreConfSeverity(conf string) string {
+	switch conf {
+	case "high":
+		return "high"
+	case "medium":
+		return "medium"
+	default:
+		return "info"
+	}
+}
+
+func countLowMitre(hits []scanner.MitreHit) int {
+	n := 0
+	for _, m := range hits {
+		if m.Confidence == "low" {
+			n++
+		}
+	}
+	return n
 }
 
 func appendKV(lines []treeLine, key string, vals []string) []treeLine {

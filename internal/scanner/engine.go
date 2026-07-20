@@ -312,6 +312,8 @@ func (e *Engine) scanOne(ctx context.Context, t Target) Result {
 	}
 
 	res.Duration = time.Since(start).Round(time.Millisecond).String()
+	res.Findings = AnnotateMitre(res.Findings)
+	res.Mitre = MitreRollup(res.Findings)
 	e.scanned.Add(1)
 	if len(res.Errors) > 0 && res.DNS == nil && res.TLS == nil && len(res.Banners) == 0 && res.URLProbe == nil {
 		e.failed.Add(1)

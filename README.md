@@ -89,6 +89,14 @@ casre -diff baseline.json example.com
 | **http** | Redirects, headers, security-header gaps, tech fingerprints, page analysis |
 | **enrich** | CDN detection, Team Cymru ASN, mail/hosting hints |
 
+## MITRE ATT&CK
+
+Findings are tagged with relevant [ATT&CK](https://attack.mitre.org/) techniques (always on). Tags appear on each finding and as a deduped **MITRE** rollup in text output; JSON includes `mitre` on each finding plus a top-level `mitre` array.
+
+Coverage focuses on what CASRE can observe: phishing delivery, lure staging (cloud buckets, deepviews), impersonation, and redirect chains — with confidence (`high` / `medium` / `low`). Post-compromise tactics are out of scope.
+
+Low-confidence rollup rows are hidden unless you pass `-v`.
+
 ## Authorization
 
 Only scan hosts and URLs you own or have explicit permission to test.
