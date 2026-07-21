@@ -150,6 +150,39 @@ func (m model) storyItems() []storyItem {
 		}
 	}
 
+	if in := r.Intel; in != nil {
+		if d := in.Domain; d != nil {
+			if !d.CreatedAt.IsZero() {
+				detail := ""
+				if d.Registrar != "" {
+					detail = "registrar: " + d.Registrar
+				}
+				add("Intel", "domain age", fmt.Sprintf("%d day(s) · registered %s", d.AgeDays, d.CreatedAt.Format("2006-01-02")), detail)
+			} else if d.Registrar != "" {
+				add("Intel", "registrar", d.Registrar, "")
+			}
+			if !d.ExpiresAt.IsZero() {
+				add("Intel", "expires", d.ExpiresAt.Format("2006-01-02"), "")
+			}
+		}
+		if in.CTTotal > 0 {
+			shown := in.CTSiblings
+			if len(shown) > 6 {
+				shown = shown[:6]
+			}
+			add("Intel", "CT siblings", fmt.Sprintf("%d host(s)", in.CTTotal), strings.Join(shown, " · "))
+		}
+		if in.Favicon != nil && in.Favicon.MMH3 != 0 {
+			add("Intel", "favicon", fmt.Sprintf("mmh3 %d", in.Favicon.MMH3), "Shodan pivot: http.favicon.hash:"+fmt.Sprintf("%d", in.Favicon.MMH3))
+		}
+		if len(in.CampaignPeers) > 0 {
+			add("Intel", "campaign", fmt.Sprintf("%d related target(s)", len(in.CampaignPeers)), strings.Join(in.CampaignPeers, " · "))
+		}
+		for _, note := range in.Reputation {
+			add("Intel", "reputation", note, "")
+		}
+	}
+
 	seed := r.Host
 	final := r.FinalHost
 	if final == "" {

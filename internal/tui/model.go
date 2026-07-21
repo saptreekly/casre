@@ -3,8 +3,10 @@ package tui
 import (
 	"encoding/base64"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -62,6 +64,8 @@ func newModel(results []scanner.Result) model {
 }
 
 func newModelWithDiff(results []scanner.Result, changes []diff.Change, compared bool) model {
+	// Annotate cross-target campaign links (shared IP/ASN/cert/favicon/kit).
+	scanner.CorrelateCampaigns(results)
 	m := model{
 		results:  results,
 		picking:  len(results) > 1,
@@ -160,6 +164,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if u := m.selectedURL(); u != "" {
 				return m, copyURLCmd(u)
 			}
+		case "e":
+			return m, exportIOCsCmd(m.result())
 		case "enter":
 			switch m.tab {
 			case tabChain, tabIndicators:
@@ -358,7 +364,7 @@ func (m model) visibleFindings() []scanner.Finding {
 }
 
 func (m model) footerHelp() string {
-	base := "1–6 tabs  ·  r rescan  ·  esc new scan  ·  q quit"
+	base := "1–6 tabs  ·  r rescan  ·  e export IOCs  ·  esc new scan  ·  q quit"
 	switch m.tab {
 	case tabStory:
 		return "↑↓ move  ·  c copy  ·  " + base
@@ -506,6 +512,38 @@ func (m model) viewPicker() string {
 		b.WriteByte('\n')
 	}
 	return b.String()
+}
+
+func exportIOCsCmd(r scanner.Result) tea.Cmd {
+	return func() tea.Msg {
+		if r.IOCs == nil {
+			return statusMsg{text: "no IOCs to export"}
+		}
+		host := r.Host
+		if host == "" {
+			host = "target"
+		}
+		safe := strings.Map(func(rr rune) rune {
+			switch {
+			case rr >= 'a' && rr <= 'z', rr >= 'A' && rr <= 'Z', rr >= '0' && rr <= '9', rr == '-', rr == '.':
+				return rr
+			default:
+				return '_'
+			}
+		}, host)
+		stamp := time.Now().Format("20060102-150405")
+		base := fmt.Sprintf("casre-iocs-%s-%s", safe, stamp)
+
+		csvPath := base + ".csv"
+		stixPath := base + ".stix.json"
+		if err := os.WriteFile(csvPath, []byte(scanner.ExportIOCsCSV(r.IOCs)), 0o644); err != nil {
+			return statusMsg{text: "export failed: " + err.Error()}
+		}
+		if err := os.WriteFile(stixPath, []byte(scanner.ExportIOCsSTIX(r.IOCs, host)), 0o644); err != nil {
+			return statusMsg{text: "export failed: " + err.Error()}
+		}
+		return statusMsg{text: fmt.Sprintf("exported %d IOC(s) → %s + %s", len(r.IOCs.All), csvPath, stixPath)}
+	}
 }
 
 func copyURLCmd(s string) tea.Cmd {

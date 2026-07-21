@@ -85,6 +85,30 @@ func BuildVerdict(r Result) *Verdict {
 			add(12, "URL userinfo obfuscation")
 		case f.Category == "url" && strings.Contains(msg, "punycode"):
 			add(8, "punycode/IDN host")
+		case f.Category == "intel" && f.Severity == "high":
+			switch {
+			case strings.Contains(msg, "lookalike"):
+				add(16, "brand lookalike domain")
+			case strings.Contains(msg, "domain age"):
+				add(14, "freshly registered domain")
+			default:
+				add(8, "high intel signal")
+			}
+		case f.Category == "intel" && f.Severity == "medium":
+			switch {
+			case strings.Contains(msg, "lookalike"):
+				add(10, "brand lookalike domain")
+			case strings.Contains(msg, "virustotal"), strings.Contains(msg, "urlscan"), strings.Contains(msg, "shodan"):
+				add(12, "external reputation hit")
+			case strings.Contains(msg, "domain age"):
+				add(8, "recently registered domain")
+			case strings.Contains(msg, "tls trust"):
+				add(5, "low TLS trust")
+			case strings.Contains(msg, "dga-like"), strings.Contains(msg, "algorithmic"):
+				add(5, "algorithmic hostname")
+			default:
+				add(4, "medium intel signal")
+			}
 		}
 	}
 

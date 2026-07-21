@@ -85,6 +85,7 @@ func (m setupModel) applyConfig() config.Config {
 	if cfg.FuzzMaxHosts <= 0 {
 		cfg.FuzzMaxHosts = 2
 	}
+	cfg.HopWorkers = config.ClampHopWorkers(cfg.HopWorkers)
 	return cfg
 }
 
@@ -165,7 +166,7 @@ func (m setupModel) updateHome(msg tea.KeyMsg) (setupModel, tea.Cmd) {
 }
 
 func (m setupModel) updateOptions(msg tea.KeyMsg) (setupModel, tea.Cmd) {
-	const nOpts = 7 // preset, depth, maxurls, timeout, follow, campaign, fuzz
+	const nOpts = 8 // preset, depth, maxurls, workers, timeout, follow, campaign, fuzz
 	switch msg.String() {
 	case "esc", "o", "q":
 		m.screen = screenHome
@@ -207,9 +208,16 @@ func (m *setupModel) nudgeOption(delta int) {
 		m.cfg.MaxURLs = clampInt(m.cfg.MaxURLs+step, 1, 200)
 		config.MarkCustomPreset(&m.cfg)
 	case 3:
+		step := 2
+		if delta < 0 {
+			step = -2
+		}
+		m.cfg.HopWorkers = clampInt(m.cfg.HopWorkers+step, config.HopWorkersMin, config.HopWorkersMax)
+		config.MarkCustomPreset(&m.cfg)
+	case 4:
 		sec := int(m.cfg.Timeout.Seconds()) + delta
 		m.cfg.Timeout = time.Duration(clampInt(sec, 1, 60)) * time.Second
-	case 4:
+	case 5:
 		m.cfg.Follow = !m.cfg.Follow
 		if !m.cfg.Follow {
 			m.cfg.Campaign = false
@@ -217,12 +225,12 @@ func (m *setupModel) nudgeOption(delta int) {
 			m.cfg.Campaign = true
 		}
 		config.MarkCustomPreset(&m.cfg)
-	case 5:
+	case 6:
 		if m.cfg.Follow {
 			m.cfg.Campaign = !m.cfg.Campaign
 			config.MarkCustomPreset(&m.cfg)
 		}
-	case 6:
+	case 7:
 		m.cfg.FuzzPaths = !m.cfg.FuzzPaths
 		config.MarkCustomPreset(&m.cfg)
 	}
@@ -336,6 +344,7 @@ func (m setupModel) viewOptions() string {
 	if preset == "" {
 		preset = config.DetectCrawlPreset(m.cfg)
 	}
+	workers := config.ClampHopWorkers(m.cfg.HopWorkers)
 	rows := []struct {
 		label string
 		value string
@@ -344,6 +353,7 @@ func (m setupModel) viewOptions() string {
 		{"Crawl profile", presetLabel(preset), "Quick / Deep / Wide / Custom"},
 		{"How deep to follow", strconv.Itoa(m.cfg.Depth) + " hops", "← → change (switches to Custom)"},
 		{"Max pages to visit", strconv.Itoa(m.cfg.MaxURLs), "← → change (switches to Custom)"},
+		{"Parallel probes", strconv.Itoa(workers), "hop + fuzz workers · Quick 8 · Deep 16 · Wide 24"},
 		{"Connection timeout", fmt.Sprintf("%g s", m.cfg.Timeout.Seconds()), "← → change"},
 		{"Follow redirects & JS", onOffWords(m.cfg.Follow), "space toggle"},
 		{"Campaign mode", campaignWords(m.cfg), "stops at brand/CDN decoys"},
@@ -388,13 +398,13 @@ func presetLabel(p string) string {
 func presetBlurb(p string) string {
 	switch p {
 	case config.PresetQuick:
-		return "Quick: 3 hops · 12 pages · campaign on · lite fuzz"
+		return "Quick: 3 hops · 12 pages · 8 probes · campaign on · lite fuzz"
 	case config.PresetDeep:
-		return "Deep: 12 hops · 60 pages · campaign on · full fuzz"
+		return "Deep: 12 hops · 60 pages · 16 probes · campaign on · full fuzz"
 	case config.PresetWide:
-		return "Wide: 6 hops · 100 pages · campaign off · full fuzz"
+		return "Wide: 6 hops · 100 pages · 24 probes · campaign off · full fuzz"
 	default:
-		return "Custom: manual depth / pages / fuzz"
+		return "Custom: manual depth / pages / probes / fuzz"
 	}
 }
 

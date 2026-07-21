@@ -39,7 +39,8 @@ type Config struct {
 	// CrawlBudget is the wall-clock limit for hop-graph mapping (0 = auto).
 	CrawlBudget time.Duration
 
-	// HopWorkers is parallelism for URL hop probes within one target.
+	// HopWorkers is parallelism for URL hop probes within one target (crawl + fuzz waves).
+	// Presets: Quick 8, Deep 16, Wide 24. Clamp to [1, 32] at use sites.
 	HopWorkers int
 
 	// EvidenceDir when set saves HTML snapshots of cloaker/lander pages.
@@ -61,6 +62,7 @@ type Modules struct {
 	Banner bool
 	HTTP   bool
 	Enrich bool // ASN / CDN / infra hints
+	Intel  bool // keyless external intel: RDAP age, CT siblings, favicon hash
 }
 
 // Default returns a sensible configuration for recon scans.
@@ -76,6 +78,7 @@ func Default() Config {
 			Banner: true,
 			HTTP:   true,
 			Enrich: true,
+			Intel:  true,
 		},
 		Follow:         true,
 		Depth:          5,
@@ -102,6 +105,7 @@ func ApplyCrawlPreset(cfg *Config, preset string) {
 		cfg.FuzzPaths = true
 		cfg.FuzzMaxHosts = 2
 		cfg.ScriptFetchMax = 2
+		cfg.HopWorkers = 8
 		cfg.CrawlPreset = PresetQuick
 	case PresetDeep:
 		cfg.Follow = true
@@ -111,6 +115,7 @@ func ApplyCrawlPreset(cfg *Config, preset string) {
 		cfg.FuzzPaths = true
 		cfg.FuzzMaxHosts = 3
 		cfg.ScriptFetchMax = 5
+		cfg.HopWorkers = 16
 		cfg.CrawlPreset = PresetDeep
 	case PresetWide:
 		cfg.Follow = true
@@ -120,10 +125,27 @@ func ApplyCrawlPreset(cfg *Config, preset string) {
 		cfg.FuzzPaths = true
 		cfg.FuzzMaxHosts = 4
 		cfg.ScriptFetchMax = 5
+		cfg.HopWorkers = 24
 		cfg.CrawlPreset = PresetWide
 	default:
 		cfg.CrawlPreset = PresetCustom
 	}
+}
+
+const (
+	HopWorkersMin = 1
+	HopWorkersMax = 32
+)
+
+// ClampHopWorkers returns workers in [1, 32], defaulting empty/invalid to 8.
+func ClampHopWorkers(n int) int {
+	if n < HopWorkersMin {
+		return 8
+	}
+	if n > HopWorkersMax {
+		return HopWorkersMax
+	}
+	return n
 }
 
 // MarkCustomPreset flips the label when the user edits knobs by hand.
@@ -141,7 +163,8 @@ func DetectCrawlPreset(cfg Config) string {
 			tmp.MaxURLs == cfg.MaxURLs &&
 			tmp.Campaign == cfg.Campaign &&
 			tmp.Follow == cfg.Follow &&
-			tmp.FuzzPaths == cfg.FuzzPaths {
+			tmp.FuzzPaths == cfg.FuzzPaths &&
+			tmp.HopWorkers == cfg.HopWorkers {
 			return p
 		}
 	}

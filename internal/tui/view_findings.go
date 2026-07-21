@@ -172,10 +172,12 @@ func catRank(c string) int {
 		return 6
 	case "graph":
 		return 7
-	case "enrich":
+	case "intel":
 		return 8
-	default:
+	case "enrich":
 		return 9
+	default:
+		return 10
 	}
 }
 
@@ -197,6 +199,8 @@ func categoryLabel(c string) string {
 		return "Ports"
 	case "graph":
 		return "Campaign"
+	case "intel":
+		return "Intel"
 	case "enrich":
 		return "Enrichment"
 	case "":

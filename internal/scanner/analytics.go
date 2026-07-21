@@ -390,6 +390,12 @@ func buildBlastRadius(r Result) BlastRadius {
 		addHost(h.Host)
 	}
 
+	if r.Intel != nil {
+		for _, s := range r.Intel.CTSiblings {
+			addHost(s)
+		}
+	}
+
 	ipSet := map[string]struct{}{}
 	if r.DNS != nil {
 		for _, ip := range append(append([]string{}, r.DNS.A...), r.DNS.AAAA...) {
@@ -501,6 +507,21 @@ func buildAttributions(r Result) []Attribution {
 		}
 		if len(r.Page.ScriptsSkimmed) > 0 {
 			add("External script skim", strings.Join(r.Page.ScriptsSkimmed, " · "), "page")
+		}
+	}
+
+	if r.Intel != nil {
+		if d := r.Intel.Domain; d != nil && !d.CreatedAt.IsZero() {
+			add(fmt.Sprintf("Domain age %d day(s)", d.AgeDays), "RDAP "+d.CreatedAt.Format("2006-01-02"), "intel")
+		}
+		if r.Intel.CTTotal > 0 {
+			add(fmt.Sprintf("%d CT sibling host(s)", r.Intel.CTTotal), "crt.sh %."+r.Intel.RegDomain, "intel")
+		}
+		if r.Intel.Favicon != nil && r.Intel.Favicon.MMH3 != 0 {
+			add("Favicon fingerprint", fmt.Sprintf("mmh3 %d", r.Intel.Favicon.MMH3), "intel")
+		}
+		for _, note := range r.Intel.Reputation {
+			add(note, "opt-in reputation API", "intel")
 		}
 	}
 
@@ -721,6 +742,27 @@ func buildConfidence(r Result, inv *Investigation) ConfidenceBand {
 	}
 	if techTotal >= 2 {
 		addReason(5, "multiple redirect techniques")
+	}
+
+	if r.Intel != nil && r.Intel.Domain != nil && !r.Intel.Domain.CreatedAt.IsZero() {
+		switch {
+		case r.Intel.Domain.AgeDays <= 7:
+			addReason(12, "domain registered in last 7 days")
+		case r.Intel.Domain.AgeDays <= 30:
+			addReason(7, "domain registered in last 30 days")
+		}
+	}
+	if hasFindingContains(r, "lookalike of") {
+		addReason(10, "brand lookalike hostname")
+	}
+	if hasFindingContains(r, "algorithmic/dga-like") {
+		addReason(5, "algorithmic/DGA hostname")
+	}
+	if d, _ := TLSTrust(r); d >= 40 {
+		addReason(6, "low TLS trust signals")
+	}
+	if r.Intel != nil && len(r.Intel.Reputation) > 0 {
+		addReason(12, "external reputation flagged host")
 	}
 
 	for _, g := range inv.Gaps {

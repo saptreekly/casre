@@ -99,13 +99,7 @@ func CrawlFollow(
 	if maxURLs < 1 {
 		maxURLs = 10
 	}
-	workers := cfg.HopWorkers
-	if workers < 1 {
-		workers = 1
-	}
-	if workers > 32 {
-		workers = 32
-	}
+	workers := config.ClampHopWorkers(cfg.HopWorkers)
 	campaign := cfg.Campaign
 	fullCrawl := !campaign
 

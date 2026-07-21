@@ -312,6 +312,31 @@ func (e *Engine) scanOne(ctx context.Context, t Target) Result {
 		addFindings(FuzzInterestingPaths(scanCtx, e.cfg, e.limiter, res))
 	}
 
+	// Keyless external intel (RDAP age, CT siblings, favicon fingerprint) plus
+	// opt-in reputation when API keys are present in the environment.
+	if e.cfg.Modules.Intel {
+		intelHost := firstNonEmpty(res.FinalHost, res.Host)
+		if intelHost != "" && !IsIPHost(intelHost) {
+			waitIntel := func() error { return waitRate(scanCtx) }
+			var fav *FaviconIntel
+			if favURL := faviconURLFor(res, intelHost); favURL != "" {
+				if err := waitRate(scanCtx); err == nil {
+					fav = FetchFavicon(scanCtx, favURL, e.cfg.Timeout, e.cfg.InsecureTLS)
+				}
+			}
+			if rep := GatherIntel(scanCtx, intelHost, e.cfg.Timeout, waitIntel, fav); rep != nil {
+				if keys := OptInKeysFromEnv(); keys.Any() {
+					EnrichReputation(scanCtx, rep, keys, e.cfg.Timeout, waitIntel)
+				}
+				res.Intel = rep
+				addFindings(IntelFindings(rep))
+			}
+		}
+	}
+
+	// Local heuristics (no network): lookalike/homoglyph, DGA, TLS trust.
+	addFindings(HeuristicFindings(res))
+
 	res.Duration = time.Since(start).Round(time.Millisecond).String()
 	res.Findings = AnnotateMitre(res.Findings)
 	res.Mitre = MitreRollup(res.Findings)

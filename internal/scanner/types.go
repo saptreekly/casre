@@ -21,6 +21,7 @@ type Result struct {
 	Banners       []Banner       `json:"banners,omitempty"`
 	HTTP          []HTTPResult   `json:"http,omitempty"`
 	Enrich        *Enrichment    `json:"enrichment,omitempty"`
+	Intel         *IntelReport   `json:"intel,omitempty"`
 	Findings      []Finding      `json:"findings,omitempty"`
 	Mitre         []MitreHit     `json:"mitre,omitempty"`
 	Verdict       *Verdict       `json:"verdict,omitempty"`

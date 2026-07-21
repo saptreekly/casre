@@ -93,12 +93,9 @@ func FuzzInterestingPaths(ctx context.Context, cfg config.Config, limiter *ratel
 		timeout = 1500 * time.Millisecond
 	}
 
-	workers := cfg.HopWorkers
+	workers := config.ClampHopWorkers(cfg.HopWorkers)
 	if workers < 4 {
 		workers = 4
-	}
-	if workers > 16 {
-		workers = 16
 	}
 
 	var (
